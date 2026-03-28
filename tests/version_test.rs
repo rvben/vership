@@ -1,8 +1,7 @@
 use semver::Version;
 use vership::version::{
-    parse_cargo_toml_version, replace_cargo_toml_version, replace_pyproject_version,
-    parse_package_json_version, replace_package_json_version,
-    parse_pyproject_version,
+    parse_cargo_toml_version, parse_package_json_version, parse_pyproject_version,
+    replace_cargo_toml_version, replace_package_json_version, replace_pyproject_version,
 };
 
 #[test]

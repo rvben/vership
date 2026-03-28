@@ -48,12 +48,13 @@ impl ProjectType for PythonProject {
         let content = std::fs::read_to_string(&path)
             .map_err(|e| Error::Other(format!("read pyproject.toml: {e}")))?;
 
-        let updated = version::replace_pyproject_version(&content, new_version).ok_or_else(|| {
-            Error::Version(
-                "cannot update version in pyproject.toml: version is dynamic or missing"
-                    .to_string(),
-            )
-        })?;
+        let updated =
+            version::replace_pyproject_version(&content, new_version).ok_or_else(|| {
+                Error::Version(
+                    "cannot update version in pyproject.toml: version is dynamic or missing"
+                        .to_string(),
+                )
+            })?;
 
         std::fs::write(&path, updated)
             .map_err(|e| Error::Other(format!("write pyproject.toml: {e}")))?;

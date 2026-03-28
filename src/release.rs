@@ -112,8 +112,16 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
     // Pre-flight checks
     let options = CheckOptions {
         expected_branch: config.project.branch.clone(),
-        run_lint: if skip_checks { false } else { config.checks.lint },
-        run_tests: if skip_checks { false } else { config.checks.tests },
+        run_lint: if skip_checks {
+            false
+        } else {
+            config.checks.lint
+        },
+        run_tests: if skip_checks {
+            false
+        } else {
+            config.checks.tests
+        },
         lint_command: config.checks.lint_command.clone(),
         test_command: config.checks.test_command.clone(),
     };

@@ -65,9 +65,11 @@ fn node_modified_files_with_npm() {
 
     let files = project.modified_files();
     assert!(files.iter().any(|f| f.to_str() == Some("package.json")));
-    assert!(files
-        .iter()
-        .any(|f| f.to_str() == Some("package-lock.json")));
+    assert!(
+        files
+            .iter()
+            .any(|f| f.to_str() == Some("package-lock.json"))
+    );
 }
 
 #[test]

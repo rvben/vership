@@ -92,7 +92,10 @@ impl ProjectType for NodeProject {
         };
 
         let (program, args): (&str, &[&str]) = match manager {
-            "npm" => ("npm", &["install", "--package-lock-only", "--ignore-scripts"]),
+            "npm" => (
+                "npm",
+                &["install", "--package-lock-only", "--ignore-scripts"],
+            ),
             "yarn" => ("yarn", &["install"]),
             "pnpm" => ("pnpm", &["install", "--lockfile-only"]),
             _ => return Ok(()),

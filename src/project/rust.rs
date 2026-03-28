@@ -81,9 +81,7 @@ impl ProjectType for RustProject {
             .status()
             .map_err(|e| Error::Other(format!("run cargo fmt: {e}")))?;
         if !fmt_status.success() {
-            return Err(Error::CheckFailed(
-                "cargo fmt check failed".to_string(),
-            ));
+            return Err(Error::CheckFailed("cargo fmt check failed".to_string()));
         }
 
         let clippy_status = std::process::Command::new("cargo")
@@ -96,9 +94,7 @@ impl ProjectType for RustProject {
         if clippy_status.success() {
             Ok(())
         } else {
-            Err(Error::CheckFailed(
-                "cargo clippy failed".to_string(),
-            ))
+            Err(Error::CheckFailed("cargo clippy failed".to_string()))
         }
     }
 
@@ -113,9 +109,7 @@ impl ProjectType for RustProject {
         if status.success() {
             Ok(())
         } else {
-            Err(Error::CheckFailed(
-                "cargo test failed".to_string(),
-            ))
+            Err(Error::CheckFailed("cargo test failed".to_string()))
         }
     }
 
