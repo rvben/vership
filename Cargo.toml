@@ -1,0 +1,32 @@
+[package]
+name = "vership"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "Multi-target release orchestrator"
+license = "MIT"
+repository = "https://github.com/rvben/vership"
+homepage = "https://github.com/rvben/vership"
+keywords = ["release", "changelog", "versioning", "semver", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "vership"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+semver = { version = "1", features = ["serde"] }
+thiserror = "2"
+owo-colors = "4"
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
