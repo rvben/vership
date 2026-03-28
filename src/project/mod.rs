@@ -1,3 +1,4 @@
+pub mod cargo_helpers;
 pub mod detect;
 pub mod go;
 pub mod node;
