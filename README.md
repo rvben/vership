@@ -11,15 +11,17 @@ A release orchestrator that handles version bumping, changelog generation, and p
 $ vership bump patch
 ✓ No uncommitted changes
 ✓ On branch main
-✓ Tag v0.3.1 does not exist
+✓ Tag v0.4.1 does not exist
 ✓ Lock file in sync
 ✓ Lint passes
 ✓ Tests pass
-→ Bumping 0.3.0 → 0.3.1
-→ Updated rust + maturin
-→ Generated changelog (2 entries)
-→ Committed: chore: bump version to v0.3.1
-→ Tagged: v0.3.1
+→ Bumping 0.4.0 → 0.4.1
+→ Updated rust
+→ Updating version files
+→ Generated changelog (3 entries)
+→ Running artifact: cargo run --release -- schema generate
+→ Committed: chore: bump version to v0.4.1
+→ Tagged: v0.4.1
 → Pushed to origin
 ```
 
@@ -32,6 +34,8 @@ Most release tools require config files, plugins, or CI integration before they 
 | Zero config | Yes | No | No | No |
 | Multi-ecosystem | Rust, Node, Python, Go | Rust only | Node only | Any (changelog only) |
 | Changelog generation | Built-in | External tool | Plugin | Yes |
+| Multi-file version sync | Built-in | No | Plugin | No |
+| Artifact regeneration | Built-in | No | Plugin | No |
 | Pre-flight checks | Built-in | Partial | No | No |
 | Single binary | Yes | Yes | No (Node runtime) | Yes |
 | Agent-friendly (`--json`, `schema`) | Yes | No | No | No |
@@ -92,8 +96,10 @@ vership completions <shell>        Generate shell completions
 2. **Check** clean working tree, correct branch, tag doesn't exist, lockfile in sync
 3. **Check** lint and tests pass (skippable with `--skip-checks`)
 4. **Bump** version in project files (Cargo.toml, package.json, pyproject.toml) or tag directly (Go)
-5. **Generate** changelog from conventional commits since last tag
-6. **Commit**, **tag**, and **push**
+5. **Update** version references in extra files (`version_files`)
+6. **Generate** changelog from conventional commits since last tag
+7. **Regenerate** artifacts from commands (`artifacts`)
+8. **Commit**, **tag**, and **push**
 
 Your existing CI release workflow (GitHub Actions, etc.) triggers on the tag push as usual. vership handles the local side only.
 
@@ -121,6 +127,48 @@ Generated from [conventional commits](https://www.conventionalcommits.org/) in [
 | `change` | Changed |
 | `feat!` / `BREAKING CHANGE` | Breaking Changes |
 | `chore`, `docs`, `ci`, `test`, `refactor`, `build`, `style` | Excluded |
+
+## Version Files
+
+Projects often have version strings scattered across READMEs, docs, and companion packages. vership updates them all during the bump:
+
+```toml
+# Text mode: search/replace with placeholders
+[[version_files]]
+glob = "README.md"
+search = "rev: v{prev}"       # {prev} = old version
+replace = "rev: v{version}"   # {version} = new version
+
+# Field mode: update JSON fields directly
+[[version_files]]
+glob = "npm/*/package.json"
+field = "version"
+
+# Wildcard: update all values in an object
+[[version_files]]
+glob = "package.json"
+field = "optionalDependencies.*"
+```
+
+All matched files are staged and included in the release commit automatically.
+
+## Artifacts
+
+Some projects need to regenerate files from the built binary during release (schemas, rule exports, API docs). vership runs these commands and commits the output:
+
+```toml
+# Capture stdout to a file
+[[artifacts]]
+command = "cargo run --release -- schema generate-json"
+output = "schema.json"
+
+# Or let the command write its own files
+[[artifacts]]
+command = "make generate-docs"
+files = ["docs/api.json"]
+```
+
+Commands run from the project root via `sh -c`. Output files are staged automatically. If a declared file doesn't exist after the command runs, the release aborts with a clear error.
 
 ## Configuration
 
