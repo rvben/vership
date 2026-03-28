@@ -46,3 +46,89 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
         } => vership::release::bump(level, dry_run, skip_checks),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use vership::cli::{BumpLevel, Cli, Command, ConfigCommand};
+
+    #[test]
+    fn cli_bump_patch() {
+        let cli = Cli::try_parse_from(["vership", "bump", "patch"]).unwrap();
+        match cli.command {
+            Command::Bump {
+                level,
+                dry_run,
+                skip_checks,
+            } => {
+                assert!(matches!(level, BumpLevel::Patch));
+                assert!(!dry_run);
+                assert!(!skip_checks);
+            }
+            _ => panic!("expected Bump"),
+        }
+    }
+
+    #[test]
+    fn cli_bump_major_dry_run() {
+        let cli = Cli::try_parse_from(["vership", "bump", "major", "--dry-run"]).unwrap();
+        match cli.command {
+            Command::Bump { level, dry_run, .. } => {
+                assert!(matches!(level, BumpLevel::Major));
+                assert!(dry_run);
+            }
+            _ => panic!("expected Bump"),
+        }
+    }
+
+    #[test]
+    fn cli_bump_skip_checks() {
+        let cli = Cli::try_parse_from(["vership", "bump", "minor", "--skip-checks"]).unwrap();
+        match cli.command {
+            Command::Bump { skip_checks, .. } => assert!(skip_checks),
+            _ => panic!("expected Bump"),
+        }
+    }
+
+    #[test]
+    fn cli_status() {
+        let cli = Cli::try_parse_from(["vership", "status"]).unwrap();
+        assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn cli_preflight() {
+        let cli = Cli::try_parse_from(["vership", "preflight"]).unwrap();
+        assert!(matches!(cli.command, Command::Preflight));
+    }
+
+    #[test]
+    fn cli_changelog() {
+        let cli = Cli::try_parse_from(["vership", "changelog"]).unwrap();
+        assert!(matches!(cli.command, Command::Changelog));
+    }
+
+    #[test]
+    fn cli_schema() {
+        let cli = Cli::try_parse_from(["vership", "schema"]).unwrap();
+        assert!(matches!(cli.command, Command::Schema));
+    }
+
+    #[test]
+    fn cli_config_init() {
+        let cli = Cli::try_parse_from(["vership", "config", "init"]).unwrap();
+        assert!(matches!(cli.command, Command::Config(ConfigCommand::Init)));
+    }
+
+    #[test]
+    fn cli_json_flag() {
+        let cli = Cli::try_parse_from(["vership", "--json", "status"]).unwrap();
+        assert!(cli.json);
+    }
+
+    #[test]
+    fn cli_missing_subcommand_fails() {
+        let result = Cli::try_parse_from(["vership"]);
+        assert!(result.is_err());
+    }
+}

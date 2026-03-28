@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use crate::error::{Error, Result};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub project: ProjectConfig,
@@ -28,7 +28,7 @@ pub struct ChangelogConfig {
     pub exclude_types: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct HooksConfig {
     #[serde(rename = "pre-bump")]
@@ -46,17 +46,6 @@ pub struct HooksConfig {
 pub struct ChecksConfig {
     pub lint: bool,
     pub tests: bool,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            project: ProjectConfig::default(),
-            changelog: ChangelogConfig::default(),
-            hooks: HooksConfig::default(),
-            checks: ChecksConfig::default(),
-        }
-    }
 }
 
 impl Default for ProjectConfig {
@@ -77,17 +66,6 @@ impl Default for ChangelogConfig {
     }
 }
 
-impl Default for HooksConfig {
-    fn default() -> Self {
-        Self {
-            pre_bump: None,
-            post_bump: None,
-            pre_push: None,
-            post_push: None,
-        }
-    }
-}
-
 impl Default for ChecksConfig {
     fn default() -> Self {
         Self {
@@ -98,7 +76,7 @@ impl Default for ChecksConfig {
 }
 
 impl Config {
-    pub fn from_str(content: &str) -> Result<Self> {
+    pub fn parse(content: &str) -> Result<Self> {
         if content.trim().is_empty() {
             return Ok(Self::default());
         }
@@ -107,7 +85,7 @@ impl Config {
 
     pub fn load(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
-            Ok(content) => Self::from_str(&content).unwrap_or_default(),
+            Ok(content) => Self::parse(&content).unwrap_or_default(),
             Err(_) => Self::default(),
         }
     }

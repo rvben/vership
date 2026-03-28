@@ -2,7 +2,7 @@ use vership::config::Config;
 
 #[test]
 fn parse_empty_config() {
-    let config = Config::from_str("").unwrap();
+    let config = Config::parse("").unwrap();
     assert_eq!(config.project.branch, "main");
     assert!(config.hooks.pre_bump.is_none());
 }
@@ -25,7 +25,7 @@ post-push = "echo done"
 lint = false
 tests = false
 "#;
-    let config = Config::from_str(toml).unwrap();
+    let config = Config::parse(toml).unwrap();
     assert_eq!(config.project.project_type.as_deref(), Some("rust-maturin"));
     assert_eq!(config.project.branch, "develop");
     assert_eq!(config.changelog.unconventional, "include");
@@ -41,7 +41,7 @@ fn parse_partial_config_uses_defaults() {
 [hooks]
 pre-bump = "make check"
 "#;
-    let config = Config::from_str(toml).unwrap();
+    let config = Config::parse(toml).unwrap();
     assert_eq!(config.project.branch, "main");
     assert!(config.checks.lint);
     assert!(config.checks.tests);
