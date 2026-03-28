@@ -69,6 +69,8 @@ pub fn preflight() -> Result<()> {
         expected_branch: config.project.branch.clone(),
         run_lint: config.checks.lint,
         run_tests: config.checks.tests,
+        lint_command: config.checks.lint_command.clone(),
+        test_command: config.checks.test_command.clone(),
     };
 
     checks::run_preflight(&root, &tag, project.as_ref(), &options)?;
@@ -110,16 +112,10 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
     // Pre-flight checks
     let options = CheckOptions {
         expected_branch: config.project.branch.clone(),
-        run_lint: if skip_checks {
-            false
-        } else {
-            config.checks.lint
-        },
-        run_tests: if skip_checks {
-            false
-        } else {
-            config.checks.tests
-        },
+        run_lint: if skip_checks { false } else { config.checks.lint },
+        run_tests: if skip_checks { false } else { config.checks.tests },
+        lint_command: config.checks.lint_command.clone(),
+        test_command: config.checks.test_command.clone(),
     };
     checks::run_preflight(&root, &tag, project.as_ref(), &options)?;
 
@@ -132,18 +128,7 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
     output::print_step(&format!("Bumping {current_version} → {new_version}"));
     if !dry_run {
         project.write_version(&root, &new_version)?;
-
-        // Sync lockfile after version bump
-        let status = std::process::Command::new("cargo")
-            .args(["check", "--quiet"])
-            .current_dir(&root)
-            .status()
-            .map_err(|e| Error::Other(format!("failed to run cargo check: {e}")))?;
-        if !status.success() {
-            return Err(Error::CheckFailed(
-                "cargo check failed after version bump".to_string(),
-            ));
-        }
+        project.sync_lockfile(&root)?;
     }
     output::print_step(&format!("Updated {}", project.name().to_lowercase()));
 

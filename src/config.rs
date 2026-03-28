@@ -46,6 +46,8 @@ pub struct HooksConfig {
 pub struct ChecksConfig {
     pub lint: bool,
     pub tests: bool,
+    pub lint_command: Option<String>,
+    pub test_command: Option<String>,
 }
 
 impl Default for ProjectConfig {
@@ -71,6 +73,8 @@ impl Default for ChecksConfig {
         Self {
             lint: true,
             tests: true,
+            lint_command: None,
+            test_command: None,
         }
     }
 }
