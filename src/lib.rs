@@ -1,3 +1,4 @@
+pub mod artifacts;
 pub mod changelog;
 pub mod checks;
 pub mod cli;
