@@ -1,6 +1,8 @@
 use semver::Version;
 use vership::version::{
     parse_cargo_toml_version, replace_cargo_toml_version, replace_pyproject_version,
+    parse_package_json_version, replace_package_json_version,
+    parse_pyproject_version,
 };
 
 #[test]
@@ -141,4 +143,68 @@ dynamic = ["description"]
 "#;
     let result = replace_pyproject_version(content, &Version::new(1, 0, 0));
     assert!(result.is_none());
+}
+
+#[test]
+fn parse_version_from_package_json() {
+    let content = r#"{
+  "name": "my-app",
+  "version": "2.1.0",
+  "description": "test"
+}"#;
+    let version = parse_package_json_version(content).unwrap();
+    assert_eq!(version, Version::new(2, 1, 0));
+}
+
+#[test]
+fn parse_version_missing_from_package_json() {
+    let content = r#"{
+  "name": "my-app",
+  "description": "test"
+}"#;
+    let result = parse_package_json_version(content);
+    assert!(result.is_err());
+}
+
+#[test]
+fn replace_version_in_package_json() {
+    let content = r#"{
+  "name": "my-app",
+  "version": "1.0.0",
+  "dependencies": {
+    "lodash": "^4.17.0"
+  }
+}"#;
+    let updated = replace_package_json_version(content, &Version::new(1, 1, 0));
+    assert!(updated.contains(r#""version": "1.1.0""#));
+    assert!(updated.contains(r#""lodash": "^4.17.0""#));
+}
+
+#[test]
+fn parse_version_from_pyproject_toml() {
+    let content = r#"[project]
+name = "my-app"
+version = "3.2.1"
+"#;
+    let version = parse_pyproject_version(content).unwrap();
+    assert_eq!(version, Version::new(3, 2, 1));
+}
+
+#[test]
+fn parse_version_from_pyproject_toml_dynamic() {
+    let content = r#"[project]
+name = "my-app"
+dynamic = ["version"]
+"#;
+    let result = parse_pyproject_version(content);
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_version_from_pyproject_toml_no_project_section() {
+    let content = r#"[tool.setuptools]
+packages = ["myapp"]
+"#;
+    let result = parse_pyproject_version(content);
+    assert!(result.is_err());
 }
