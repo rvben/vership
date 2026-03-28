@@ -43,7 +43,8 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             level,
             dry_run,
             skip_checks,
-        } => vership::release::bump(level, dry_run, skip_checks),
+            no_push,
+        } => vership::release::bump(level, dry_run, skip_checks, no_push),
     }
 }
 
@@ -60,10 +61,12 @@ mod tests {
                 level,
                 dry_run,
                 skip_checks,
+                no_push,
             } => {
                 assert!(matches!(level, BumpLevel::Patch));
                 assert!(!dry_run);
                 assert!(!skip_checks);
+                assert!(!no_push);
             }
             _ => panic!("expected Bump"),
         }

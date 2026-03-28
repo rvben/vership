@@ -97,7 +97,7 @@ pub fn changelog_preview() -> Result<()> {
     Ok(())
 }
 
-pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool) -> Result<()> {
+pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
     let root = project_root()?;
     let config = Config::load(&root.join("vership.toml"));
     let project = project::detect(&root, config.project.project_type.as_deref())?;
@@ -202,6 +202,11 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool) -> Result<()> {
     // Tag
     git::create_tag(&root, &tag)?;
     output::print_step(&format!("Tagged: {tag}"));
+
+    if no_push {
+        output::print_step(&format!("Ready to push: git push origin main {tag}"));
+        return Ok(());
+    }
 
     // Pre-push hook
     hooks::run_hook(&root, "pre-push", config.hooks.pre_push.as_deref())?;

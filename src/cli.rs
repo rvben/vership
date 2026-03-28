@@ -24,6 +24,9 @@ pub enum Command {
         /// Skip lint and test checks
         #[arg(long)]
         skip_checks: bool,
+        /// Stop after tagging, do not push
+        #[arg(long)]
+        no_push: bool,
     },
     /// Preview changelog for unreleased commits
     Changelog,
