@@ -35,24 +35,14 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             generate(shell, &mut cmd, "vership", &mut std::io::stdout());
             Ok(())
         }
-        Command::Config(ConfigCommand::Init) => {
-            vership::config::init()
-        }
-        Command::Status => {
-            vership::release::status(&output)
-        }
-        Command::Preflight => {
-            vership::release::preflight()
-        }
-        Command::Changelog => {
-            vership::release::changelog_preview()
-        }
+        Command::Config(ConfigCommand::Init) => vership::config::init(),
+        Command::Status => vership::release::status(&output),
+        Command::Preflight => vership::release::preflight(),
+        Command::Changelog => vership::release::changelog_preview(),
         Command::Bump {
             level,
             dry_run,
             skip_checks,
-        } => {
-            vership::release::bump(level, dry_run, skip_checks)
-        }
+        } => vership::release::bump(level, dry_run, skip_checks),
     }
 }
