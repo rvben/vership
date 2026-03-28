@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
+
+## [0.2.2](https://github.com/rvben/vership/compare/v0.2.1...v0.2.2) - 2026-03-28
+
+### Fixed
+
+- **ci**: allow dirty working tree for cargo publish (downloaded artifacts) ([29e9b6c](https://github.com/rvben/vership/commit/29e9b6ced8e6741bec9cd12e830327649a721046))
+
 ## [0.2.1](https://github.com/rvben/vership/compare/v0.2.0...v0.2.1) - 2026-03-28
 
 ### Fixed
