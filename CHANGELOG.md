@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.3.1](https://github.com/rvben/vership/compare/v0.3.0...v0.3.1) - 2026-03-28
+
+### Added
+
+- **detect**: add Go project type detection ([ac3462a](https://github.com/rvben/vership/commit/ac3462a5f206122f47408cc718a307e673c295fb))
+- **release**: use 'chore: release' for tag-versioned projects ([4d3aa2d](https://github.com/rvben/vership/commit/4d3aa2d52cfc92179d6b747bde8e7cd1bb34e462))
+- **project**: add Go project type with tag-based versioning ([dda34c4](https://github.com/rvben/vership/commit/dda34c4f17ad36ce449a21624137c784c4f89ac3))
+
 ## [0.3.0](https://github.com/rvben/vership/compare/v0.2.4...v0.3.0) - 2026-03-28
 
 ### Added
