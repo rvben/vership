@@ -188,7 +188,11 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
     git::stage_files(&root, &stage_refs)?;
 
     // Commit
-    let commit_msg = format!("chore: bump version to {tag}");
+    let commit_msg = if project.is_tag_versioned() {
+        format!("chore: release {tag}")
+    } else {
+        format!("chore: bump version to {tag}")
+    };
     git::commit(&root, &commit_msg)?;
     output::print_step(&format!("Committed: {commit_msg}"));
 
