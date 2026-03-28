@@ -100,7 +100,9 @@ fn has_uncommitted_changes_dirty() {
     let dir = TempDir::new().unwrap();
     init_git_repo(dir.path());
     create_commit(dir.path(), "initial");
-    std::fs::write(dir.path().join("dirty.txt"), "dirty").unwrap();
+    // Modify a tracked file (untracked files should not block releases)
+    let tracked_file = dir.path().join(format!("file-{}.txt", "initial".len()));
+    std::fs::write(&tracked_file, "modified content").unwrap();
 
     assert!(vership::git::has_uncommitted_changes(dir.path()).unwrap());
 }

@@ -72,8 +72,11 @@ pub fn tag_exists(root: &Path, tag: &str) -> Result<bool> {
 
 /// Return true if the working tree has staged or unstaged changes, including untracked files.
 pub fn has_uncommitted_changes(root: &Path) -> Result<bool> {
-    let status = git_output(root, &["status", "--porcelain"])?;
-    Ok(!status.is_empty())
+    // Check staged and unstaged changes to tracked files only.
+    // Untracked files should not block a release.
+    let has_staged = !git_success(root, &["diff", "--cached", "--quiet"])?;
+    let has_unstaged = !git_success(root, &["diff", "--quiet"])?;
+    Ok(has_staged || has_unstaged)
 }
 
 /// Return the name of the currently checked-out branch.
