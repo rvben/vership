@@ -30,7 +30,7 @@ Most release tools require config files, plugins, or CI integration before they 
 | | vership | cargo-release | semantic-release | git-cliff |
 |---|---|---|---|---|
 | Zero config | Yes | No | No | No |
-| Multi-ecosystem | Rust, Node, Python | Rust only | Node only | Any (changelog only) |
+| Multi-ecosystem | Rust, Node, Python, Go | Rust only | Node only | Any (changelog only) |
 | Changelog generation | Built-in | External tool | Plugin | Yes |
 | Pre-flight checks | Built-in | Partial | No | No |
 | Single binary | Yes | Yes | No (Node runtime) | Yes |
@@ -88,10 +88,10 @@ vership completions <shell>        Generate shell completions
 
 `vership bump patch` runs this flow:
 
-1. **Detect** project type (Rust, Rust+Maturin, Node, Python)
+1. **Detect** project type (Rust, Rust+Maturin, Node, Go, Python)
 2. **Check** clean working tree, correct branch, tag doesn't exist, lockfile in sync
 3. **Check** lint and tests pass (skippable with `--skip-checks`)
-4. **Bump** version in project files (Cargo.toml, package.json, pyproject.toml)
+4. **Bump** version in project files (Cargo.toml, package.json, pyproject.toml) or tag directly (Go)
 5. **Generate** changelog from conventional commits since last tag
 6. **Commit**, **tag**, and **push**
 

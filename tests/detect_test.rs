@@ -113,7 +113,11 @@ fn detect_override_python() {
 #[test]
 fn detect_go_project() {
     let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("go.mod"), "module example.com/test\n\ngo 1.21\n").unwrap();
+    fs::write(
+        dir.path().join("go.mod"),
+        "module example.com/test\n\ngo 1.21\n",
+    )
+    .unwrap();
     let p = project::detect(dir.path(), None).unwrap();
     assert_eq!(p.name(), "Go");
 }
@@ -121,7 +125,11 @@ fn detect_go_project() {
 #[test]
 fn detect_rust_over_go() {
     let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"test\"\nversion = \"0.1.0\"\n").unwrap();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"test\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
     fs::write(dir.path().join("go.mod"), "module example.com/test\n").unwrap();
     let p = project::detect(dir.path(), None).unwrap();
     assert_eq!(p.name(), "Rust");
@@ -130,7 +138,11 @@ fn detect_rust_over_go() {
 #[test]
 fn detect_node_over_go() {
     let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("package.json"), r#"{"name": "test", "version": "1.0.0"}"#).unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name": "test", "version": "1.0.0"}"#,
+    )
+    .unwrap();
     fs::write(dir.path().join("go.mod"), "module example.com/test\n").unwrap();
     let p = project::detect(dir.path(), None).unwrap();
     assert_eq!(p.name(), "Node");
@@ -140,7 +152,11 @@ fn detect_node_over_go() {
 fn detect_go_over_python() {
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join("go.mod"), "module example.com/test\n").unwrap();
-    fs::write(dir.path().join("pyproject.toml"), "[project]\nname = \"test\"\nversion = \"1.0.0\"\n").unwrap();
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"test\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
     let p = project::detect(dir.path(), None).unwrap();
     assert_eq!(p.name(), "Go");
 }

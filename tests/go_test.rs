@@ -115,7 +115,9 @@ fn go_write_version_is_noop() {
     let content_before = fs::read_to_string(dir.path().join("go.mod")).unwrap();
 
     let project = GoProject::new();
-    project.write_version(dir.path(), &Version::new(1, 0, 0)).unwrap();
+    project
+        .write_version(dir.path(), &Version::new(1, 0, 0))
+        .unwrap();
 
     let content_after = fs::read_to_string(dir.path().join("go.mod")).unwrap();
     assert_eq!(content_before, content_after);
@@ -125,5 +127,8 @@ fn go_write_version_is_noop() {
 fn go_modified_files() {
     let project = GoProject::new();
     let files = project.modified_files();
-    assert_eq!(files, vec![PathBuf::from("go.mod"), PathBuf::from("go.sum")]);
+    assert_eq!(
+        files,
+        vec![PathBuf::from("go.mod"), PathBuf::from("go.sum")]
+    );
 }
