@@ -10,6 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.4.0](https://github.com/rvben/vership/compare/v0.3.1...v0.4.0) - 2026-03-28
+
+### Added
+
+- **release**: integrate version_files and artifacts into bump flow ([3123251](https://github.com/rvben/vership/commit/31232515bf5a81cea417bf3da9371de19449a545))
+- **artifacts**: implement artifact command execution with stdout capture ([649d773](https://github.com/rvben/vership/commit/649d77397d0140bbaba1deeb8b4b8a971ec6b7f7))
+- **version_files**: implement JSON field mode with wildcard support ([c6dc46c](https://github.com/rvben/vership/commit/c6dc46ccd96b4316d7d6cd48a73f5ee5ad763ddf))
+- **version_files**: implement text mode with glob and placeholder replacement ([23f1041](https://github.com/rvben/vership/commit/23f10418258814d2e8c2201cfd2df6bf49788f68))
+- **config**: add version_files and artifacts config structs ([c598530](https://github.com/rvben/vership/commit/c598530b97e5b3e1d43df6298977cdf568323bed))
+
+### Fixed
+
+- preserve JSON key order, validate artifact files exist, add edge case tests ([7930efe](https://github.com/rvben/vership/commit/7930efee6876dade6cea0a04246f69e01d93acd4))
+
 ## [0.3.1](https://github.com/rvben/vership/compare/v0.3.0...v0.3.1) - 2026-03-28
 
 ### Added
