@@ -94,7 +94,13 @@ pub fn generate_changelog(
     }
 
     // Section order: Breaking Changes first, then Added, Changed, Fixed, Performance
-    let section_order = ["Breaking Changes", "Added", "Changed", "Fixed", "Performance"];
+    let section_order = [
+        "Breaking Changes",
+        "Added",
+        "Changed",
+        "Fixed",
+        "Performance",
+    ];
 
     if !breaking.is_empty() {
         output.push_str("\n### Breaking Changes\n\n");

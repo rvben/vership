@@ -6,7 +6,21 @@ use super::ProjectType;
 use super::rust::RustProject;
 use super::rust_maturin::RustMaturinProject;
 
-pub fn detect(root: &Path) -> Result<Box<dyn ProjectType>> {
+/// Detect the project type rooted at `root`.
+///
+/// When `project_type_override` is provided it takes precedence over auto-detection.
+/// Accepted values: `"rust"`, `"rust-maturin"`.
+pub fn detect(root: &Path, project_type_override: Option<&str>) -> Result<Box<dyn ProjectType>> {
+    if let Some(override_type) = project_type_override {
+        return match override_type {
+            "rust" => Ok(Box::new(RustProject::new())),
+            "rust-maturin" => Ok(Box::new(RustMaturinProject::new())),
+            other => Err(Error::Config(format!(
+                "unknown project type '{other}': valid values are \"rust\", \"rust-maturin\""
+            ))),
+        };
+    }
+
     let cargo_toml = root.join("Cargo.toml");
     let pyproject_toml = root.join("pyproject.toml");
 

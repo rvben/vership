@@ -61,7 +61,9 @@ fn latest_tag_returns_most_recent() {
     create_commit(dir.path(), "second");
     create_tag(dir.path(), "v0.2.0");
 
-    let tag = vership::git::latest_semver_tag(dir.path()).unwrap().unwrap();
+    let tag = vership::git::latest_semver_tag(dir.path())
+        .unwrap()
+        .unwrap();
     assert_eq!(tag, "v0.2.0");
 }
 

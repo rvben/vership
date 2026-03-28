@@ -11,13 +11,15 @@ use crate::output::{self, OutputConfig};
 use crate::project;
 use crate::version;
 
-fn project_root() -> PathBuf {
-    std::env::current_dir().expect("current directory")
+fn project_root() -> Result<PathBuf> {
+    std::env::current_dir()
+        .map_err(|e| Error::Other(format!("failed to get current directory: {e}")))
 }
 
 pub fn status(output: &OutputConfig) -> Result<()> {
-    let root = project_root();
-    let project = project::detect(&root)?;
+    let root = project_root()?;
+    let config = Config::load(&root.join("vership.toml"));
+    let project = project::detect(&root, config.project.project_type.as_deref())?;
     let current_version = project.read_version(&root)?;
     let latest_tag = git::latest_semver_tag(&root)?;
     let commits = git::commits_since_tag(&root, latest_tag.as_deref())?;
@@ -29,7 +31,10 @@ pub fn status(output: &OutputConfig) -> Result<()> {
             "latest_tag": latest_tag,
             "unreleased_commits": commits.len(),
         });
-        println!("{}", serde_json::to_string_pretty(&data).expect("serialize"));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&data).expect("serialize")
+        );
     } else {
         eprintln!("Project type: {}", project.name());
         eprintln!("Current version: {current_version}");
@@ -53,9 +58,9 @@ pub fn status(output: &OutputConfig) -> Result<()> {
 }
 
 pub fn preflight() -> Result<()> {
-    let root = project_root();
+    let root = project_root()?;
     let config = Config::load(&root.join("vership.toml"));
-    let project = project::detect(&root)?;
+    let project = project::detect(&root, config.project.project_type.as_deref())?;
     let current_version = project.read_version(&root)?;
     let new_version = version::bump(current_version, BumpLevel::Patch);
     let tag = format!("v{new_version}");
@@ -72,8 +77,9 @@ pub fn preflight() -> Result<()> {
 }
 
 pub fn changelog_preview() -> Result<()> {
-    let root = project_root();
-    let project = project::detect(&root)?;
+    let root = project_root()?;
+    let config = Config::load(&root.join("vership.toml"));
+    let project = project::detect(&root, config.project.project_type.as_deref())?;
     let current_version = project.read_version(&root)?;
     let latest_tag = git::latest_semver_tag(&root)?;
     let commits = git::commits_since_tag(&root, latest_tag.as_deref())?;
@@ -92,9 +98,9 @@ pub fn changelog_preview() -> Result<()> {
 }
 
 pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool) -> Result<()> {
-    let root = project_root();
+    let root = project_root()?;
     let config = Config::load(&root.join("vership.toml"));
-    let project = project::detect(&root)?;
+    let project = project::detect(&root, config.project.project_type.as_deref())?;
 
     // Calculate new version
     let current_version = project.read_version(&root)?;
@@ -104,8 +110,16 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool) -> Result<()> {
     // Pre-flight checks
     let options = CheckOptions {
         expected_branch: config.project.branch.clone(),
-        run_lint: if skip_checks { false } else { config.checks.lint },
-        run_tests: if skip_checks { false } else { config.checks.tests },
+        run_lint: if skip_checks {
+            false
+        } else {
+            config.checks.lint
+        },
+        run_tests: if skip_checks {
+            false
+        } else {
+            config.checks.tests
+        },
     };
     checks::run_preflight(&root, &tag, project.as_ref(), &options)?;
 
@@ -120,10 +134,16 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool) -> Result<()> {
         project.write_version(&root, &new_version)?;
 
         // Sync lockfile after version bump
-        let _ = std::process::Command::new("cargo")
+        let status = std::process::Command::new("cargo")
             .args(["check", "--quiet"])
             .current_dir(&root)
-            .status();
+            .status()
+            .map_err(|e| Error::Other(format!("failed to run cargo check: {e}")))?;
+        if !status.success() {
+            return Err(Error::CheckFailed(
+                "cargo check failed after version bump".to_string(),
+            ));
+        }
     }
     output::print_step(&format!("Updated {}", project.name().to_lowercase()));
 

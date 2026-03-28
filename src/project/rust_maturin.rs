@@ -1,14 +1,19 @@
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use super::ProjectType;
 use crate::error::{Error, Result};
 use crate::version;
 
-pub struct RustMaturinProject;
+pub struct RustMaturinProject {
+    modified_files: RefCell<Vec<PathBuf>>,
+}
 
 impl RustMaturinProject {
     pub fn new() -> Self {
-        Self
+        Self {
+            modified_files: RefCell::new(Vec::new()),
+        }
     }
 }
 
@@ -31,6 +36,9 @@ impl ProjectType for RustMaturinProject {
     }
 
     fn write_version(&self, root: &Path, new_version: &semver::Version) -> Result<()> {
+        let mut modified = self.modified_files.borrow_mut();
+        modified.clear();
+
         // Update Cargo.toml
         let cargo_path = root.join("Cargo.toml");
         let content = std::fs::read_to_string(&cargo_path)
@@ -38,8 +46,10 @@ impl ProjectType for RustMaturinProject {
         let updated = version::replace_cargo_toml_version(&content, new_version);
         std::fs::write(&cargo_path, updated)
             .map_err(|e| Error::Other(format!("write Cargo.toml: {e}")))?;
+        modified.push(PathBuf::from("Cargo.toml"));
+        modified.push(PathBuf::from("Cargo.lock"));
 
-        // Update pyproject.toml version if it has a static version field
+        // Update pyproject.toml version only if it has a static version field
         let pyproject_path = root.join("pyproject.toml");
         if pyproject_path.exists() {
             let content = std::fs::read_to_string(&pyproject_path)
@@ -47,8 +57,10 @@ impl ProjectType for RustMaturinProject {
             if let Some(updated) = version::replace_pyproject_version(&content, new_version) {
                 std::fs::write(&pyproject_path, updated)
                     .map_err(|e| Error::Other(format!("write pyproject.toml: {e}")))?;
+                modified.push(PathBuf::from("pyproject.toml"));
             }
         }
+
         Ok(())
     }
 
@@ -68,10 +80,6 @@ impl ProjectType for RustMaturinProject {
     }
 
     fn modified_files(&self) -> Vec<PathBuf> {
-        vec![
-            PathBuf::from("Cargo.toml"),
-            PathBuf::from("Cargo.lock"),
-            PathBuf::from("pyproject.toml"),
-        ]
+        self.modified_files.borrow().clone()
     }
 }

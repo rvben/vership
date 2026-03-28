@@ -1,4 +1,6 @@
-use vership::changelog::{generate_changelog, parse_conventional_commit, ConventionalCommit};
+use vership::changelog::{
+    ConventionalCommit, generate_changelog, generate_changelog_with_mode, parse_conventional_commit,
+};
 use vership::git::Commit;
 
 #[test]
@@ -110,9 +112,9 @@ fn changelog_includes_commit_hash_links() {
 
     let base_url = "https://github.com/rvben/vership";
     let changelog = generate_changelog(&commits, "0.1.0", None, Some(base_url));
-    assert!(changelog.contains(
-        "[abc1234](https://github.com/rvben/vership/commit/abc1234def5678)"
-    ));
+    assert!(
+        changelog.contains("[abc1234](https://github.com/rvben/vership/commit/abc1234def5678)")
+    );
 }
 
 #[test]
@@ -124,8 +126,7 @@ fn changelog_includes_compare_link() {
 
     let base_url = "https://github.com/rvben/vership";
     let changelog = generate_changelog(&commits, "0.2.0", Some("0.1.0"), Some(base_url));
-    assert!(changelog
-        .contains("(https://github.com/rvben/vership/compare/v0.1.0...v0.2.0)"));
+    assert!(changelog.contains("(https://github.com/rvben/vership/compare/v0.1.0...v0.2.0)"));
 }
 
 #[test]
@@ -192,3 +193,141 @@ fn changelog_empty_when_no_relevant_commits() {
 // Suppress unused import warning — ConventionalCommit is part of the public API
 // and is used by the parse tests implicitly through type inference.
 fn _assert_conventional_commit_is_public(_: ConventionalCommit) {}
+
+#[test]
+fn strict_mode_errors_on_non_conventional_commit() {
+    let commits = vec![
+        Commit {
+            hash: "abc1234".into(),
+            message: "feat: proper commit".into(),
+        },
+        Commit {
+            hash: "def5678".into(),
+            message: "Update readme without conventional prefix".into(),
+        },
+    ];
+
+    let result = generate_changelog_with_mode(&commits, "1.0.0", None, None, "strict");
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("non-conventional commit found"));
+    assert!(err.contains("def5678"));
+}
+
+#[test]
+fn strict_mode_succeeds_when_all_commits_conventional() {
+    let commits = vec![
+        Commit {
+            hash: "abc1234".into(),
+            message: "feat: add feature".into(),
+        },
+        Commit {
+            hash: "def5678".into(),
+            message: "fix: correct bug".into(),
+        },
+    ];
+
+    let result = generate_changelog_with_mode(&commits, "1.0.0", None, None, "strict");
+    assert!(result.is_ok());
+    let changelog = result.unwrap();
+    assert!(changelog.contains("### Added"));
+    assert!(changelog.contains("### Fixed"));
+}
+
+#[test]
+fn strict_mode_skips_merge_commits() {
+    let commits = vec![
+        Commit {
+            hash: "abc1234".into(),
+            message: "feat: real change".into(),
+        },
+        Commit {
+            hash: "def5678".into(),
+            message: "Merge branch 'feature' into main".into(),
+        },
+    ];
+
+    let result = generate_changelog_with_mode(&commits, "1.0.0", None, None, "strict");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn include_mode_adds_other_section_for_non_conventional() {
+    let commits = vec![
+        Commit {
+            hash: "abc1234".into(),
+            message: "feat: proper commit".into(),
+        },
+        Commit {
+            hash: "def5678".into(),
+            message: "Update readme without conventional prefix".into(),
+        },
+    ];
+
+    let result = generate_changelog_with_mode(&commits, "1.0.0", None, None, "include");
+    assert!(result.is_ok());
+    let changelog = result.unwrap();
+    assert!(changelog.contains("### Added"));
+    assert!(changelog.contains("### Other"));
+    assert!(changelog.contains("Update readme without conventional prefix"));
+}
+
+#[test]
+fn include_mode_omits_other_section_when_all_conventional() {
+    let commits = vec![
+        Commit {
+            hash: "abc1234".into(),
+            message: "feat: add export".into(),
+        },
+        Commit {
+            hash: "def5678".into(),
+            message: "fix: null check".into(),
+        },
+    ];
+
+    let result = generate_changelog_with_mode(&commits, "1.0.0", None, None, "include");
+    assert!(result.is_ok());
+    let changelog = result.unwrap();
+    assert!(!changelog.contains("### Other"));
+}
+
+#[test]
+fn include_mode_skips_merge_commits_in_other_section() {
+    let commits = vec![
+        Commit {
+            hash: "abc1234".into(),
+            message: "feat: real change".into(),
+        },
+        Commit {
+            hash: "def5678".into(),
+            message: "Merge branch 'feature' into main".into(),
+        },
+    ];
+
+    let result = generate_changelog_with_mode(&commits, "1.0.0", None, None, "include");
+    assert!(result.is_ok());
+    let changelog = result.unwrap();
+    assert!(!changelog.contains("### Other"));
+    assert!(!changelog.contains("Merge branch"));
+}
+
+#[test]
+fn exclude_mode_silently_skips_non_conventional() {
+    let commits = vec![
+        Commit {
+            hash: "abc1234".into(),
+            message: "feat: add feature".into(),
+        },
+        Commit {
+            hash: "def5678".into(),
+            message: "This is not conventional".into(),
+        },
+    ];
+
+    let result = generate_changelog_with_mode(&commits, "1.0.0", None, None, "exclude");
+    assert!(result.is_ok());
+    let changelog = result.unwrap();
+    assert!(changelog.contains("### Added"));
+    assert!(!changelog.contains("### Other"));
+    assert!(!changelog.contains("This is not conventional"));
+}

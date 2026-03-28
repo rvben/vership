@@ -15,7 +15,31 @@ fn git_output(root: &Path, args: &[&str]) -> Result<String> {
         .current_dir(root)
         .output()
         .map_err(|e| Error::Git(format!("failed to run git: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(Error::Git(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            stderr
+        )));
+    }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Run git and return stdout if successful, or None if git exits non-zero.
+/// Use this for commands where a non-zero exit means "not found" rather than an error.
+fn git_output_optional(root: &Path, args: &[&str]) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .map_err(|e| Error::Git(format!("failed to run git: {e}")))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    ))
 }
 
 fn git_success(root: &Path, args: &[&str]) -> Result<bool> {
@@ -40,7 +64,10 @@ pub fn latest_semver_tag(root: &Path) -> Result<Option<String>> {
 
 /// Check whether the given tag exists in the repository.
 pub fn tag_exists(root: &Path, tag: &str) -> Result<bool> {
-    git_success(root, &["rev-parse", "--verify", &format!("refs/tags/{tag}")])
+    git_success(
+        root,
+        &["rev-parse", "--verify", &format!("refs/tags/{tag}")],
+    )
 }
 
 /// Return true if the working tree has staged or unstaged changes, including untracked files.
@@ -89,7 +116,9 @@ pub fn commits_since_tag(root: &Path, tag: Option<&str>) -> Result<Vec<Commit>> 
 ///
 /// Normalization removes the `.git` suffix and converts SSH URLs to HTTPS.
 pub fn remote_url(root: &Path) -> Result<Option<String>> {
-    let url = git_output(root, &["remote", "get-url", "origin"])?;
+    let Some(url) = git_output_optional(root, &["remote", "get-url", "origin"])? else {
+        return Ok(None);
+    };
     if url.is_empty() {
         return Ok(None);
     }

@@ -1,5 +1,6 @@
 use regex::Regex;
 use semver::Version;
+use serde::Deserialize;
 
 use crate::cli::BumpLevel;
 use crate::error::{Error, Result};
@@ -12,14 +13,21 @@ pub fn bump(version: Version, level: BumpLevel) -> Version {
     }
 }
 
+#[derive(Deserialize)]
+struct CargoToml {
+    package: CargoPackage,
+}
+
+#[derive(Deserialize)]
+struct CargoPackage {
+    version: String,
+}
+
 pub fn parse_cargo_toml_version(content: &str) -> Result<Version> {
-    let re = Regex::new(r#"(?m)^version\s*=\s*"([^"]+)""#).expect("valid regex");
-    let caps = re
-        .captures(content)
-        .ok_or_else(|| Error::Version("no version field found in Cargo.toml".to_string()))?;
-    let version_str = &caps[1];
-    Version::parse(version_str)
-        .map_err(|e| Error::Version(format!("invalid version '{version_str}': {e}")))
+    let parsed: CargoToml = toml::from_str(content)
+        .map_err(|e| Error::Version(format!("failed to parse Cargo.toml: {e}")))?;
+    Version::parse(&parsed.package.version)
+        .map_err(|e| Error::Version(format!("invalid version '{}': {e}", parsed.package.version)))
 }
 
 pub fn replace_cargo_toml_version(content: &str, new_version: &Version) -> String {
@@ -28,19 +36,28 @@ pub fn replace_cargo_toml_version(content: &str, new_version: &Version) -> Strin
         .to_string()
 }
 
+#[derive(Deserialize)]
+struct PyprojectToml {
+    project: Option<PyprojectProject>,
+}
+
+#[derive(Deserialize)]
+struct PyprojectProject {
+    dynamic: Option<Vec<String>>,
+}
+
 /// Replace version in pyproject.toml if a static version field exists.
-/// Returns None if the version is dynamic (managed by maturin).
+/// Returns None if the version is dynamic (listed in `[project].dynamic`).
 pub fn replace_pyproject_version(content: &str, new_version: &Version) -> Option<String> {
-    let re = Regex::new(r#"(?m)^version\s*=\s*"[^"]+""#).expect("valid regex");
-    // Only replace if there's a static version and "version" is not in dynamic list
-    if content.contains(r#""version""#)
-        && content.contains("[project]")
-        && content.contains("dynamic")
-        && content.contains("version")
+    let parsed: PyprojectToml = toml::from_str(content).ok()?;
+    if let Some(project) = parsed.project
+        && let Some(dynamic) = project.dynamic
+        && dynamic.iter().any(|s| s == "version")
     {
-        // version is dynamic, don't replace
         return None;
     }
+
+    let re = Regex::new(r#"(?m)^version\s*=\s*"[^"]+""#).expect("valid regex");
     if re.is_match(content) {
         Some(
             re.replace(content, format!(r#"version = "{new_version}""#))
