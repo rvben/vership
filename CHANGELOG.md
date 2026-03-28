@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.2.4](https://github.com/rvben/vership/compare/v0.2.3...v0.2.4) - 2026-03-28
+
+### Fixed
+
+- **ci**: download artifacts to /tmp to avoid cargo publish size limit ([2cb9ee9](https://github.com/rvben/vership/commit/2cb9ee9ac0a71774c411a5614a1f02a4ecd86060))
+
 ## [0.2.3](https://github.com/rvben/vership/compare/v0.2.2...v0.2.3) - 2026-03-28
 
 ### Fixed
