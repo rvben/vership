@@ -61,7 +61,16 @@ jobs:
       - name: Install maturin and zig
         run: pip install maturin ziglang
       - name: Build wheel
-        run: maturin build --release --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            *-gnu)
+              maturin build --release --target ${{ matrix.target }} --zig
+              ;;
+            *)
+              maturin build --release --target ${{ matrix.target }}
+              ;;
+          esac
       - name: Build binary
         run: cargo build --release --target ${{ matrix.target }}
         env:
