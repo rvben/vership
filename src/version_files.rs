@@ -14,7 +14,12 @@ pub fn apply(
     let mut touched = BTreeSet::new();
 
     for entry in entries {
-        if entry.field.is_some() {
+        if entry.field.is_some() && (entry.search.is_some() || entry.replace.is_some()) {
+            return Err(Error::Config(format!(
+                "version_files entry for '{}': 'field' and 'search'/'replace' are mutually exclusive",
+                entry.glob
+            )));
+        } else if entry.field.is_some() {
             apply_field_mode(root, entry, version, &mut touched)?;
         } else if let (Some(search), Some(replace)) = (&entry.search, &entry.replace) {
             apply_text_mode(root, entry, search, replace, prev, version, &mut touched)?;

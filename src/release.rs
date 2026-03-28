@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::artifacts;
 use crate::changelog;
 use crate::checks::{self, CheckOptions};
 use crate::cli::BumpLevel;
@@ -10,6 +11,7 @@ use crate::hooks;
 use crate::output::{self, OutputConfig};
 use crate::project;
 use crate::version;
+use crate::version_files;
 
 fn project_root() -> Result<PathBuf> {
     std::env::current_dir()
@@ -140,6 +142,19 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
     }
     output::print_step(&format!("Updated {}", project.name().to_lowercase()));
 
+    // Update version references in extra files
+    let vf_touched = if !dry_run && !config.version_files.is_empty() {
+        output::print_step("Updating version files");
+        version_files::apply(
+            &root,
+            &config.version_files,
+            &current_version.to_string(),
+            &new_version.to_string(),
+        )?
+    } else {
+        Vec::new()
+    };
+
     // Generate changelog
     let latest_tag = git::latest_semver_tag(&root)?;
     let commits = git::commits_since_tag(&root, latest_tag.as_deref())?;
@@ -174,6 +189,13 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
 
     std::fs::write(&changelog_path, &full_changelog)?;
 
+    // Run artifact generation commands
+    let artifact_files = if !config.artifacts.is_empty() {
+        artifacts::run(&root, &config.artifacts)?
+    } else {
+        Vec::new()
+    };
+
     // Post-bump hook
     hooks::run_hook(&root, "post-bump", config.hooks.post_bump.as_deref())?;
 
@@ -183,8 +205,19 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
         .into_iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
+    let vf_strings: Vec<String> = vf_touched
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let af_strings: Vec<String> = artifact_files
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+
     let mut stage_refs: Vec<&str> = modified.iter().map(|s| s.as_str()).collect();
     stage_refs.push("CHANGELOG.md");
+    stage_refs.extend(vf_strings.iter().map(|s| s.as_str()));
+    stage_refs.extend(af_strings.iter().map(|s| s.as_str()));
     git::stage_files(&root, &stage_refs)?;
 
     // Commit

@@ -179,3 +179,31 @@ fn field_mode_preserves_2_space_indent_with_trailing_newline() {
     assert!(content.ends_with("}\n"));
     assert!(!content.contains("    ")); // no 4-space indent
 }
+
+#[test]
+fn config_validation_rejects_entry_with_both_field_and_search() {
+    let dir = TempDir::new().unwrap();
+    let entries = vec![VersionFileEntry {
+        glob: "README.md".to_string(),
+        search: Some("v{prev}".to_string()),
+        replace: Some("v{version}".to_string()),
+        field: Some("version".to_string()),
+    }];
+
+    let result = version_files::apply(dir.path(), &entries, "1.0.0", "1.1.0");
+    assert!(result.is_err());
+}
+
+#[test]
+fn config_validation_rejects_entry_with_search_but_no_replace() {
+    let dir = TempDir::new().unwrap();
+    let entries = vec![VersionFileEntry {
+        glob: "README.md".to_string(),
+        search: Some("v{prev}".to_string()),
+        replace: None,
+        field: None,
+    }];
+
+    let result = version_files::apply(dir.path(), &entries, "1.0.0", "1.1.0");
+    assert!(result.is_err());
+}
