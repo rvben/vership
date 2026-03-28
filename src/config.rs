@@ -144,6 +144,29 @@ pub fn init() -> Result<()> {
 # tests = true
 # lint_command = "npm run lint"    # Override default lint command
 # test_command = "npm test"       # Override default test command
+
+# Update version references in extra files during bump
+# [[version_files]]
+# glob = "README.md"
+# search = "v{prev}"             # Text mode: {prev} = old version
+# replace = "v{version}"         # Text mode: {version} = new version
+#
+# [[version_files]]
+# glob = "npm/*/package.json"
+# field = "version"              # Field mode: update JSON field directly
+#
+# [[version_files]]
+# glob = "package.json"
+# field = "optionalDependencies.*"  # Wildcard: update all values in object
+
+# Regenerate files from commands during bump
+# [[artifacts]]
+# command = "cargo run -- schema generate"
+# output = "schema.json"         # Capture stdout to file
+#
+# [[artifacts]]
+# command = "make generate"
+# files = ["generated.json"]     # Files the command produces
 "#;
 
     std::fs::write(path, template)?;
