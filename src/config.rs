@@ -11,6 +11,10 @@ pub struct Config {
     pub changelog: ChangelogConfig,
     pub hooks: HooksConfig,
     pub checks: ChecksConfig,
+    #[serde(default)]
+    pub version_files: Vec<VersionFileEntry>,
+    #[serde(default)]
+    pub artifacts: Vec<ArtifactEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +43,22 @@ pub struct HooksConfig {
     pub pre_push: Option<String>,
     #[serde(rename = "post-push")]
     pub post_push: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct VersionFileEntry {
+    pub glob: String,
+    pub search: Option<String>,
+    pub replace: Option<String>,
+    pub field: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ArtifactEntry {
+    pub command: String,
+    pub output: Option<String>,
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
