@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.3.0](https://github.com/rvben/vership/compare/v0.2.4...v0.3.0) - 2026-03-28
+
+### Added
+
+- **detect**: add Node and Python project type detection ([70523d0](https://github.com/rvben/vership/commit/70523d000ee3e7b9b67b0592dd68ef81017c14ff))
+- **project**: add Node project type with package.json support ([00633a1](https://github.com/rvben/vership/commit/00633a112a8d112b5b4698c36049d347ede2c7d8))
+- **project**: add Python project type with pyproject.toml support ([2ed3f83](https://github.com/rvben/vership/commit/2ed3f83b1604dea572eb6860c68cd43541255dac))
+- **version**: add package.json and pyproject.toml version parsing ([48fc0db](https://github.com/rvben/vership/commit/48fc0db76b2dd3bbc98726f65283fc3afd30fc0c))
+
+### Fixed
+
+- **node**: use detected package manager for lint and test commands ([027e165](https://github.com/rvben/vership/commit/027e165a616f750c400b0011d9c1cb836bc191c0))
+
 ## [0.2.4](https://github.com/rvben/vership/compare/v0.2.3...v0.2.4) - 2026-03-28
 
 ### Fixed
