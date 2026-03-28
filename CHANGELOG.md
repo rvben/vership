@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+
+## [0.2.1](https://github.com/rvben/vership/compare/v0.2.0...v0.2.1) - 2026-03-28
+
+### Fixed
+
+- **ci**: use --zig flag for maturin cross-compilation on GNU targets ([5e65f0b](https://github.com/rvben/vership/commit/5e65f0bc22028467fa77c463c341a85cc853e7b4))
+
 ## [0.2.0] - 2026-03-28
 
 ### Added
