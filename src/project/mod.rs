@@ -1,4 +1,6 @@
 pub mod detect;
+pub mod node;
+pub mod python;
 pub mod rust;
 pub mod rust_maturin;
 
@@ -18,6 +20,15 @@ pub trait ProjectType {
 
     /// Verify lock files are in sync
     fn verify_lockfile(&self, root: &Path) -> Result<()>;
+
+    /// Sync lock files after version bump
+    fn sync_lockfile(&self, root: &Path) -> Result<()>;
+
+    /// Run lint checks
+    fn run_lint(&self, root: &Path) -> Result<()>;
+
+    /// Run tests
+    fn run_tests(&self, root: &Path) -> Result<()>;
 
     /// Files that were modified by write_version
     fn modified_files(&self) -> Vec<PathBuf>;
