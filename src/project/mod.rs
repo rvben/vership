@@ -1,4 +1,5 @@
 pub mod detect;
+pub mod go;
 pub mod node;
 pub mod python;
 pub mod rust;
@@ -32,6 +33,12 @@ pub trait ProjectType {
 
     /// Files that were modified by write_version
     fn modified_files(&self) -> Vec<PathBuf>;
+
+    /// Whether the version source is the git tag rather than a project file.
+    /// When true, release uses "chore: release" instead of "chore: bump version to".
+    fn is_tag_versioned(&self) -> bool {
+        false
+    }
 }
 
 pub use detect::detect;
