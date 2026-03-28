@@ -120,14 +120,14 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
       - name: Publish to PyPI
         if: ${{ !inputs.dry_run && !inputs.skip_pypi }}
-        run: |
-          pip install twine
-          twine upload artifacts/build-*/*.whl artifacts/sdist/*.tar.gz
+        run: uv publish artifacts/build-*/*.whl artifacts/sdist/*.tar.gz
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
       - name: Create GitHub Release
         if: ${{ !inputs.dry_run }}
