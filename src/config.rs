@@ -106,7 +106,7 @@ pub fn init() -> Result<()> {
 # All settings below show their defaults. Uncomment to override.
 
 # [project]
-# type = "rust"        # Override auto-detection: "rust", "rust-maturin"
+# type = "rust"        # Override auto-detection: "rust", "rust-maturin", "node", "python"
 # branch = "main"      # Branch to release from
 
 # [changelog]
@@ -122,6 +122,8 @@ pub fn init() -> Result<()> {
 # [checks]
 # lint = true
 # tests = true
+# lint_command = ""    # Override default lint command (e.g. "npm run lint")
+# test_command = ""    # Override default test command (e.g. "npm test")
 "#;
 
     std::fs::write(path, template)?;
