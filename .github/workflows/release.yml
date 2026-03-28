@@ -116,7 +116,7 @@ jobs:
 
       - name: Publish to crates.io
         if: ${{ !inputs.dry_run && !inputs.skip_crates_io }}
-        run: cargo publish
+        run: cargo publish --allow-dirty
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
