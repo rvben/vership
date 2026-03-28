@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.2.3](https://github.com/rvben/vership/compare/v0.2.2...v0.2.3) - 2026-03-28
+
+### Fixed
+
+- **ci**: use uv publish instead of twine, fix cargo publish --allow-dirty ([54dccff](https://github.com/rvben/vership/commit/54dccff08f6eae3fe425c3afe2d6d0e540019cd0))
+
 ## [0.2.2](https://github.com/rvben/vership/compare/v0.2.1...v0.2.2) - 2026-03-28
 
 ### Fixed
