@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::error::{Error, Result};
 
 use super::ProjectType;
+use super::go::GoProject;
 use super::node::NodeProject;
 use super::python::PythonProject;
 use super::rust::RustProject;
@@ -11,16 +12,17 @@ use super::rust_maturin::RustMaturinProject;
 /// Detect the project type rooted at `root`.
 ///
 /// When `project_type_override` is provided it takes precedence over auto-detection.
-/// Accepted values: `"rust"`, `"rust-maturin"`, `"node"`, `"python"`.
+/// Accepted values: `"rust"`, `"rust-maturin"`, `"node"`, `"go"`, `"python"`.
 pub fn detect(root: &Path, project_type_override: Option<&str>) -> Result<Box<dyn ProjectType>> {
     if let Some(override_type) = project_type_override {
         return match override_type {
             "rust" => Ok(Box::new(RustProject::new())),
             "rust-maturin" => Ok(Box::new(RustMaturinProject::new())),
             "node" => Ok(Box::new(NodeProject::new())),
+            "go" => Ok(Box::new(GoProject::new())),
             "python" => Ok(Box::new(PythonProject::new())),
             other => Err(Error::Config(format!(
-                "unknown project type '{other}': valid values are \"rust\", \"rust-maturin\", \"node\", \"python\""
+                "unknown project type '{other}': valid values are \"rust\", \"rust-maturin\", \"node\", \"go\", \"python\""
             ))),
         };
     }
@@ -48,13 +50,19 @@ pub fn detect(root: &Path, project_type_override: Option<&str>) -> Result<Box<dy
         return Ok(Box::new(NodeProject::new()));
     }
 
-    // 4. pyproject.toml → Python
+    // 4. go.mod → Go
+    let go_mod = root.join("go.mod");
+    if go_mod.exists() {
+        return Ok(Box::new(GoProject::new()));
+    }
+
+    // 5. pyproject.toml → Python
     if pyproject_toml.exists() {
         return Ok(Box::new(PythonProject::new()));
     }
 
     Err(Error::Other(
-        "No supported project type detected. Supported: Rust, Rust+Maturin, Node, Python."
+        "No supported project type detected. Supported: Rust, Rust+Maturin, Node, Go, Python."
             .to_string(),
     ))
 }

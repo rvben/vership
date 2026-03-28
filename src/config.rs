@@ -106,7 +106,7 @@ pub fn init() -> Result<()> {
 # All settings below show their defaults. Uncomment to override.
 
 # [project]
-# type = "rust"        # Override auto-detection: "rust", "rust-maturin", "node", "python"
+# type = "rust"        # Override auto-detection: "rust", "rust-maturin", "node", "go", "python"
 # branch = "main"      # Branch to release from
 
 # [changelog]
