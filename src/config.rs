@@ -122,8 +122,8 @@ pub fn init() -> Result<()> {
 # [checks]
 # lint = true
 # tests = true
-# lint_command = ""    # Override default lint command (e.g. "npm run lint")
-# test_command = ""    # Override default test command (e.g. "npm test")
+# lint_command = "npm run lint"    # Override default lint command
+# test_command = "npm test"       # Override default test command
 "#;
 
     std::fs::write(path, template)?;
