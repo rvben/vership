@@ -84,3 +84,19 @@ fn artifact_no_output_or_files_still_runs() {
     assert!(produced.is_empty());
     assert!(marker.exists());
 }
+
+#[test]
+fn artifact_missing_declared_file_returns_error() {
+    let dir = TempDir::new().unwrap();
+
+    let entries = vec![ArtifactEntry {
+        command: "true".to_string(),
+        output: None,
+        files: vec!["nonexistent.json".to_string()],
+    }];
+
+    let result = artifacts::run(dir.path(), &entries);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("nonexistent.json"));
+}

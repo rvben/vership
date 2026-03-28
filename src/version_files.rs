@@ -51,8 +51,7 @@ fn apply_text_mode(
         .map_err(|e| Error::Config(format!("invalid glob '{}': {e}", entry.glob)))?;
 
     for path_result in paths {
-        let path = path_result
-            .map_err(|e| Error::Other(format!("glob error: {e}")))?;
+        let path = path_result.map_err(|e| Error::Other(format!("glob error: {e}")))?;
 
         let content = std::fs::read_to_string(&path)
             .map_err(|e| Error::Other(format!("read {}: {e}", path.display())))?;
@@ -85,8 +84,7 @@ fn apply_field_mode(
         .map_err(|e| Error::Config(format!("invalid glob '{}': {e}", entry.glob)))?;
 
     for path_result in paths {
-        let path = path_result
-            .map_err(|e| Error::Other(format!("glob error: {e}")))?;
+        let path = path_result.map_err(|e| Error::Other(format!("glob error: {e}")))?;
 
         let content = std::fs::read_to_string(&path)
             .map_err(|e| Error::Other(format!("read {}: {e}", path.display())))?;
@@ -154,7 +152,10 @@ fn update_json_field(
                 field
             )));
         }
-        map.insert(leaf.to_string(), serde_json::Value::String(version.to_string()));
+        map.insert(
+            leaf.to_string(),
+            serde_json::Value::String(version.to_string()),
+        );
     }
 
     Ok(())

@@ -51,6 +51,13 @@ pub fn run(root: &Path, entries: &[ArtifactEntry]) -> Result<Vec<PathBuf>> {
         }
 
         for file in &entry.files {
+            let path = root.join(file);
+            if !path.exists() {
+                return Err(Error::Other(format!(
+                    "artifact '{}' did not produce expected file: {}",
+                    entry.command, file
+                )));
+            }
             produced.push(PathBuf::from(file));
         }
     }

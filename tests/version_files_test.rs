@@ -69,15 +69,25 @@ fn text_mode_glob_matches_multiple_files() {
     let touched = version_files::apply(dir.path(), &entries, "2.0.0", "2.1.0").unwrap();
     assert_eq!(touched.len(), 2);
 
-    assert_eq!(fs::read_to_string(docs.join("a.md")).unwrap(), "rev: v2.1.0\n");
-    assert_eq!(fs::read_to_string(docs.join("b.md")).unwrap(), "rev: v2.1.0\n");
+    assert_eq!(
+        fs::read_to_string(docs.join("a.md")).unwrap(),
+        "rev: v2.1.0\n"
+    );
+    assert_eq!(
+        fs::read_to_string(docs.join("b.md")).unwrap(),
+        "rev: v2.1.0\n"
+    );
 }
 
 #[test]
 fn field_mode_updates_json_version() {
     let dir = TempDir::new().unwrap();
     let pkg = dir.path().join("package.json");
-    fs::write(&pkg, "{\n  \"name\": \"test\",\n  \"version\": \"1.0.0\"\n}\n").unwrap();
+    fs::write(
+        &pkg,
+        "{\n  \"name\": \"test\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .unwrap();
 
     let entries = vec![VersionFileEntry {
         glob: "package.json".to_string(),
@@ -206,4 +216,82 @@ fn config_validation_rejects_entry_with_search_but_no_replace() {
 
     let result = version_files::apply(dir.path(), &entries, "1.0.0", "1.1.0");
     assert!(result.is_err());
+}
+
+#[test]
+fn field_mode_preserves_key_order() {
+    let dir = TempDir::new().unwrap();
+    let pkg = dir.path().join("package.json");
+    fs::write(
+        &pkg,
+        "{\n  \"name\": \"my-pkg\",\n  \"version\": \"1.0.0\",\n  \"description\": \"A package\"\n}\n",
+    )
+    .unwrap();
+
+    let entries = vec![VersionFileEntry {
+        glob: "package.json".to_string(),
+        search: None,
+        replace: None,
+        field: Some("version".to_string()),
+    }];
+
+    version_files::apply(dir.path(), &entries, "1.0.0", "2.0.0").unwrap();
+
+    let content = fs::read_to_string(&pkg).unwrap();
+    let name_pos = content.find("\"name\"").unwrap();
+    let version_pos = content.find("\"version\"").unwrap();
+    let desc_pos = content.find("\"description\"").unwrap();
+    assert!(name_pos < version_pos, "name should come before version");
+    assert!(
+        version_pos < desc_pos,
+        "version should come before description"
+    );
+}
+
+#[test]
+fn field_mode_nested_path() {
+    let dir = TempDir::new().unwrap();
+    let pkg = dir.path().join("data.json");
+    fs::write(
+        &pkg,
+        "{\n  \"metadata\": {\n    \"build\": {\n      \"version\": \"1.0.0\"\n    }\n  }\n}\n",
+    )
+    .unwrap();
+
+    let entries = vec![VersionFileEntry {
+        glob: "data.json".to_string(),
+        search: None,
+        replace: None,
+        field: Some("metadata.build.version".to_string()),
+    }];
+
+    let touched = version_files::apply(dir.path(), &entries, "1.0.0", "2.0.0").unwrap();
+    assert_eq!(touched.len(), 1);
+
+    let content = fs::read_to_string(&pkg).unwrap();
+    assert!(content.contains("\"version\": \"2.0.0\""));
+}
+
+#[test]
+fn text_mode_replaces_multiple_occurrences_in_one_file() {
+    let dir = TempDir::new().unwrap();
+    let readme = dir.path().join("README.md");
+    fs::write(
+        &readme,
+        "First: rev: v1.0.0\nSecond: rev: v1.0.0\nThird: rev: v1.0.0\n",
+    )
+    .unwrap();
+
+    let entries = vec![VersionFileEntry {
+        glob: "README.md".to_string(),
+        search: Some("rev: v{prev}".to_string()),
+        replace: Some("rev: v{version}".to_string()),
+        field: None,
+    }];
+
+    version_files::apply(dir.path(), &entries, "1.0.0", "2.0.0").unwrap();
+
+    let content = fs::read_to_string(&readme).unwrap();
+    assert_eq!(content.matches("rev: v2.0.0").count(), 3);
+    assert_eq!(content.matches("rev: v1.0.0").count(), 0);
 }
