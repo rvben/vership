@@ -11,15 +11,15 @@ A release orchestrator that handles version bumping, changelog generation, and p
 $ vership bump patch
 ✓ No uncommitted changes
 ✓ On branch main
-✓ Tag v0.2.1 does not exist
-✓ Cargo.lock in sync
+✓ Tag v0.3.1 does not exist
+✓ Lock file in sync
 ✓ Lint passes
 ✓ Tests pass
-→ Bumping 0.2.0 → 0.2.1
-→ Updated Cargo.toml
+→ Bumping 0.3.0 → 0.3.1
+→ Updated rust + maturin
 → Generated changelog (2 entries)
-→ Committed: chore: bump version to v0.2.1
-→ Tagged: v0.2.1
+→ Committed: chore: bump version to v0.3.1
+→ Tagged: v0.3.1
 → Pushed to origin
 ```
 
@@ -30,17 +30,19 @@ Most release tools require config files, plugins, or CI integration before they 
 | | vership | cargo-release | semantic-release | git-cliff |
 |---|---|---|---|---|
 | Zero config | Yes | No | No | No |
-| Multi-ecosystem | Rust, Node, Python, Go* | Rust only | Node only | Any (changelog only) |
+| Multi-ecosystem | Rust, Node, Python | Rust only | Node only | Any (changelog only) |
 | Changelog generation | Built-in | External tool | Plugin | Yes |
 | Pre-flight checks | Built-in | Partial | No | No |
 | Single binary | Yes | Yes | No (Node runtime) | Yes |
 | Agent-friendly (`--json`, `schema`) | Yes | No | No | No |
 
-*\* Node, Python, Go support coming soon. Architecture is ready — contributions welcome.*
 
 ## Install
 
 ```bash
+# Homebrew
+brew install rvben/tap/vership
+
 # From crates.io
 cargo install vership
 
@@ -73,6 +75,7 @@ vership bump patch --dry-run
 vership bump <patch|minor|major>   Bump version, generate changelog, tag, push
   --dry-run                        Preview without making changes
   --skip-checks                    Skip lint and test checks
+  --no-push                        Stop after tagging, do not push
 vership changelog                  Preview changelog for unreleased commits
 vership preflight                  Run all pre-flight checks
 vership status                     Show version, project type, unreleased commits
@@ -85,10 +88,10 @@ vership completions <shell>        Generate shell completions
 
 `vership bump patch` runs this flow:
 
-1. **Detect** project type (Rust, Rust+Maturin, more coming)
+1. **Detect** project type (Rust, Rust+Maturin, Node, Python)
 2. **Check** clean working tree, correct branch, tag doesn't exist, lockfile in sync
 3. **Check** lint and tests pass (skippable with `--skip-checks`)
-4. **Bump** version in project files (Cargo.toml, pyproject.toml)
+4. **Bump** version in project files (Cargo.toml, package.json, pyproject.toml)
 5. **Generate** changelog from conventional commits since last tag
 6. **Commit**, **tag**, and **push**
 
@@ -134,6 +137,8 @@ post-push = "echo done"      # Run after push (e.g. trigger Homebrew update)
 [checks]
 lint = true                  # Run lint checks (default: true)
 tests = true                 # Run tests (default: true)
+lint_command = "npm run lint" # Override default lint command
+test_command = "npm test"     # Override default test command
 
 [changelog]
 unconventional = "exclude"   # "exclude", "include", or "strict"
