@@ -36,6 +36,7 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             Ok(())
         }
         Command::Config(ConfigCommand::Init) => vership::config::init(),
+        Command::Config(ConfigCommand::Show) => vership::config::show(output.json),
         Command::Status => vership::release::status(&output),
         Command::Preflight => vership::release::preflight(),
         Command::Changelog => vership::release::changelog_preview(),
@@ -121,6 +122,12 @@ mod tests {
     fn cli_config_init() {
         let cli = Cli::try_parse_from(["vership", "config", "init"]).unwrap();
         assert!(matches!(cli.command, Command::Config(ConfigCommand::Init)));
+    }
+
+    #[test]
+    fn cli_config_show() {
+        let cli = Cli::try_parse_from(["vership", "config", "show"]).unwrap();
+        assert!(matches!(cli.command, Command::Config(ConfigCommand::Show)));
     }
 
     #[test]

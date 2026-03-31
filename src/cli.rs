@@ -50,6 +50,8 @@ pub enum Command {
 pub enum ConfigCommand {
     /// Create vership.toml with detected defaults
     Init,
+    /// Show resolved effective configuration
+    Show,
 }
 
 #[derive(Clone, Copy, ValueEnum)]

@@ -1,72 +1,79 @@
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     pub project: ProjectConfig,
     pub changelog: ChangelogConfig,
     pub hooks: HooksConfig,
     pub checks: ChecksConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub version_files: Vec<VersionFileEntry>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<ArtifactEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ProjectConfig {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub project_type: Option<String>,
     pub branch: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ChangelogConfig {
     pub unconventional: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub exclude_types: Vec<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HooksConfig {
-    #[serde(rename = "pre-bump")]
+    #[serde(rename = "pre-bump", skip_serializing_if = "Option::is_none")]
     pub pre_bump: Option<String>,
-    #[serde(rename = "post-bump")]
+    #[serde(rename = "post-bump", skip_serializing_if = "Option::is_none")]
     pub post_bump: Option<String>,
-    #[serde(rename = "pre-push")]
+    #[serde(rename = "pre-push", skip_serializing_if = "Option::is_none")]
     pub pre_push: Option<String>,
-    #[serde(rename = "post-push")]
+    #[serde(rename = "post-push", skip_serializing_if = "Option::is_none")]
     pub post_push: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct VersionFileEntry {
     pub glob: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub search: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub replace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct ArtifactEntry {
     pub command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ChecksConfig {
     pub lint: bool,
     pub tests: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lint_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub test_command: Option<String>,
 }
 
@@ -113,6 +120,22 @@ impl Config {
             Err(_) => Self::default(),
         }
     }
+}
+
+pub fn show(json: bool) -> Result<()> {
+    let path = Path::new("vership.toml");
+    let config = Config::load(path);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&config).map_err(|e| Error::Config(e.to_string()))?
+        );
+    } else {
+        let toml =
+            toml::to_string_pretty(&config).map_err(|e| Error::Config(e.to_string()))?;
+        print!("{toml}");
+    }
+    Ok(())
 }
 
 pub fn init() -> Result<()> {
