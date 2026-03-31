@@ -131,8 +131,7 @@ pub fn show(json: bool) -> Result<()> {
             serde_json::to_string_pretty(&config).map_err(|e| Error::Config(e.to_string()))?
         );
     } else {
-        let toml =
-            toml::to_string_pretty(&config).map_err(|e| Error::Config(e.to_string()))?;
+        let toml = toml::to_string_pretty(&config).map_err(|e| Error::Config(e.to_string()))?;
         print!("{toml}");
     }
     Ok(())
