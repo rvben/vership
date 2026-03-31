@@ -11,6 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.4.1](https://github.com/rvben/vership/compare/v0.4.0...v0.4.1) - 2026-03-31
+
+### Added
+
+- **config**: add 'config show' subcommand to display resolved configuration ([8eb6f6e](https://github.com/rvben/vership/commit/8eb6f6e6816668f8c43fb74fdb19640c183e28cc))
+
 ## [0.4.0](https://github.com/rvben/vership/compare/v0.3.1...v0.4.0) - 2026-03-28
 
 ### Added
