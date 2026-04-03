@@ -4,6 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/vership.svg)](https://pypi.org/project/vership/)
 [![CI](https://github.com/rvben/vership/actions/workflows/ci.yml/badge.svg)](https://github.com/rvben/vership/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![codecov](https://codecov.io/gh/rvben/vership/graph/badge.svg)](https://codecov.io/gh/rvben/vership)
 
 A release orchestrator that handles version bumping, changelog generation, and publishing — with zero configuration.
 
