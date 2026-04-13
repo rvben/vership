@@ -15,6 +15,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.4.5](https://github.com/rvben/vership/compare/v0.4.4...v0.4.5) - 2026-04-13
+
+### Added
+
+- **release**: add --resume flag to force-resume interrupted bump ([585f8f9](https://github.com/rvben/vership/commit/585f8f9dc1ed80e4b0ae03b41de63597f616fb78))
+
 ## [0.4.4](https://github.com/rvben/vership/compare/v0.4.3...v0.4.4) - 2026-04-13
 
 ### Added
