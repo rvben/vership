@@ -14,6 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.4.4](https://github.com/rvben/vership/compare/v0.4.3...v0.4.4) - 2026-04-13
+
+### Added
+
+- **release**: auto-resume interrupted bump runs ([fde216b](https://github.com/rvben/vership/commit/fde216b54eac1ccbd01cf9cfce6c9e13ac256901))
+
 ## [0.4.3](https://github.com/rvben/vership/compare/v0.4.2...v0.4.3) - 2026-04-03
 
 ## [0.4.2](https://github.com/rvben/vership/compare/v0.4.1...v0.4.2) - 2026-04-03
