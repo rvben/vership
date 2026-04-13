@@ -12,6 +12,9 @@ pub struct CheckOptions {
     pub run_tests: bool,
     pub lint_command: Option<String>,
     pub test_command: Option<String>,
+    /// When true, skip the "no uncommitted changes" check. Used when resuming
+    /// an interrupted release where version files were already bumped.
+    pub allow_uncommitted: bool,
 }
 
 impl Default for CheckOptions {
@@ -22,6 +25,7 @@ impl Default for CheckOptions {
             run_tests: true,
             lint_command: None,
             test_command: None,
+            allow_uncommitted: false,
         }
     }
 }
@@ -33,14 +37,17 @@ pub fn run_preflight(
     project: &dyn ProjectType,
     options: &CheckOptions,
 ) -> Result<()> {
-    // No uncommitted changes
-    if git::has_uncommitted_changes(root)? {
+    // No uncommitted changes (skipped when resuming an interrupted release)
+    if options.allow_uncommitted {
+        output::print_check_pass("Uncommitted changes allowed (resuming interrupted release)");
+    } else if git::has_uncommitted_changes(root)? {
         output::print_check_fail("Uncommitted changes detected");
         return Err(Error::CheckFailed(
             "commit or stash your changes before releasing".to_string(),
         ));
+    } else {
+        output::print_check_pass("No uncommitted changes");
     }
-    output::print_check_pass("No uncommitted changes");
 
     // On expected branch
     let branch = git::current_branch(root)?;

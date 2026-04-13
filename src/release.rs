@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use semver::Version;
 
 use crate::artifacts;
 use crate::changelog;
@@ -12,6 +14,98 @@ use crate::output::{self, OutputConfig};
 use crate::project;
 use crate::version;
 use crate::version_files;
+
+/// Pure version logic for resume detection.
+///
+/// Returns `Some((committed_version, target_version))` when `on_disk` already
+/// equals what bumping `latest_tag` by `level` would produce, indicating a
+/// previous run wrote version files but did not commit. Returns `None` otherwise.
+fn resume_versions(
+    on_disk: &Version,
+    latest_tag: Option<&str>,
+    level: BumpLevel,
+) -> Option<(Version, Version)> {
+    let tag_str = latest_tag?;
+    let tag_version = Version::parse(tag_str.trim_start_matches('v')).ok()?;
+    let expected_new = version::bump(tag_version.clone(), level);
+    (on_disk == &expected_new).then_some((tag_version, expected_new))
+}
+
+/// Detect whether a previous `bump` run was interrupted after writing version
+/// files but before committing. Returns `(current_version, new_version, resuming)`.
+///
+/// Detection logic: if the on-disk version already equals what a `level` bump
+/// from the last git tag would produce, AND the working tree has uncommitted
+/// changes, the previous run was interrupted mid-flight.
+fn detect_resume(
+    on_disk: &Version,
+    latest_tag: Option<&str>,
+    level: BumpLevel,
+    root: &Path,
+) -> Result<(Version, Version, bool)> {
+    if let Some((current, new)) = resume_versions(on_disk, latest_tag, level)
+        && git::has_uncommitted_changes(root)?
+    {
+        return Ok((current, new, true));
+    }
+    let new = version::bump(on_disk.clone(), level);
+    Ok((on_disk.clone(), new, false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resume_versions_detects_interrupted_patch_bump() {
+        // Simulates: last tag v0.1.70, files already bumped to 0.1.71
+        let on_disk = Version::parse("0.1.71").unwrap();
+        let result = resume_versions(&on_disk, Some("v0.1.70"), BumpLevel::Patch);
+        let (current, new) = result.expect("should detect resume");
+        assert_eq!(current, Version::parse("0.1.70").unwrap());
+        assert_eq!(new, Version::parse("0.1.71").unwrap());
+    }
+
+    #[test]
+    fn test_resume_versions_no_resume_when_not_bumped() {
+        // Normal case: last tag v0.1.70, files still say 0.1.70
+        let on_disk = Version::parse("0.1.70").unwrap();
+        assert!(resume_versions(&on_disk, Some("v0.1.70"), BumpLevel::Patch).is_none());
+    }
+
+    #[test]
+    fn test_resume_versions_no_resume_when_no_tag() {
+        // First release: no prior tag
+        let on_disk = Version::parse("0.1.0").unwrap();
+        assert!(resume_versions(&on_disk, None, BumpLevel::Patch).is_none());
+    }
+
+    #[test]
+    fn test_resume_versions_no_resume_when_wrong_level() {
+        // Files bumped to minor (0.2.0) but caller asks for patch bump
+        let on_disk = Version::parse("0.2.0").unwrap();
+        assert!(
+            resume_versions(&on_disk, Some("v0.1.70"), BumpLevel::Patch).is_none(),
+            "patch bump from v0.1.70 gives 0.1.71, not 0.2.0"
+        );
+    }
+
+    #[test]
+    fn test_resume_versions_detects_minor_bump() {
+        let on_disk = Version::parse("0.2.0").unwrap();
+        let result = resume_versions(&on_disk, Some("v0.1.70"), BumpLevel::Minor);
+        assert!(result.is_some(), "minor bump from 0.1.70 gives 0.2.0");
+    }
+
+    #[test]
+    fn test_resume_versions_detects_major_bump() {
+        let on_disk = Version::parse("1.0.0").unwrap();
+        let result = resume_versions(&on_disk, Some("v0.9.5"), BumpLevel::Major);
+        let (current, new) = result.expect("should detect resume");
+        assert_eq!(current, Version::parse("0.9.5").unwrap());
+        assert_eq!(new, Version::parse("1.0.0").unwrap());
+    }
+}
 
 fn project_root() -> Result<PathBuf> {
     std::env::current_dir()
@@ -73,6 +167,7 @@ pub fn preflight() -> Result<()> {
         run_tests: config.checks.tests,
         lint_command: config.checks.lint_command.clone(),
         test_command: config.checks.test_command.clone(),
+        allow_uncommitted: false,
     };
 
     checks::run_preflight(&root, &tag, project.as_ref(), &options)?;
@@ -106,10 +201,20 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
     let config = Config::load(&root.join("vership.toml"));
     let project = project::detect(&root, config.project.project_type.as_deref())?;
 
-    // Calculate new version
-    let current_version = project.read_version(&root)?;
-    let new_version = version::bump(current_version.clone(), level);
+    // Hoist latest_tag early so resume detection and changelog generation share it.
+    let latest_tag = git::latest_semver_tag(&root)?;
+
+    // Calculate versions, detecting whether a previous run was interrupted.
+    let on_disk_version = project.read_version(&root)?;
+    let (current_version, new_version, resuming) =
+        detect_resume(&on_disk_version, latest_tag.as_deref(), level, &root)?;
     let tag = format!("v{new_version}");
+
+    if resuming {
+        output::print_step(&format!(
+            "Resuming interrupted release: {current_version} → {new_version}"
+        ));
+    }
 
     // Pre-flight checks
     let options = CheckOptions {
@@ -126,6 +231,7 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
         },
         lint_command: config.checks.lint_command.clone(),
         test_command: config.checks.test_command.clone(),
+        allow_uncommitted: resuming,
     };
     checks::run_preflight(&root, &tag, project.as_ref(), &options)?;
 
@@ -134,15 +240,21 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
         hooks::run_hook(&root, "pre-bump", config.hooks.pre_bump.as_deref())?;
     }
 
-    // Bump version in project files
-    output::print_step(&format!("Bumping {current_version} → {new_version}"));
-    if !dry_run {
-        project.write_version(&root, &new_version)?;
-        project.sync_lockfile(&root)?;
+    // Bump version in project files (skip when resuming — already done)
+    if resuming {
+        output::print_step(&format!(
+            "Bumping {current_version} → {new_version} (already applied, skipping)"
+        ));
+    } else {
+        output::print_step(&format!("Bumping {current_version} → {new_version}"));
+        if !dry_run {
+            project.write_version(&root, &new_version)?;
+            project.sync_lockfile(&root)?;
+        }
+        output::print_step(&format!("Updated {}", project.name().to_lowercase()));
     }
-    output::print_step(&format!("Updated {}", project.name().to_lowercase()));
 
-    // Update version references in extra files
+    // Update version references in extra files (idempotent: no-op if already applied)
     let vf_touched = if !dry_run && !config.version_files.is_empty() {
         output::print_step("Updating version files");
         version_files::apply(
@@ -156,7 +268,6 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
     };
 
     // Generate changelog
-    let latest_tag = git::latest_semver_tag(&root)?;
     let commits = git::commits_since_tag(&root, latest_tag.as_deref())?;
     let remote_url = git::remote_url(&root)?;
 
@@ -171,14 +282,29 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
 
     let changelog_path = root.join("CHANGELOG.md");
     let existing = std::fs::read_to_string(&changelog_path).ok();
-    let full_changelog = changelog::prepend_to_changelog(existing.as_deref(), &changelog_section);
+
+    // Guard against duplicate sections when resuming after changelog was written
+    let changelog_already_written = existing
+        .as_deref()
+        .is_some_and(|c| changelog::version_exists_in_changelog(c, &new_version.to_string()));
+    let full_changelog = if changelog_already_written {
+        existing.clone().unwrap_or_default()
+    } else {
+        changelog::prepend_to_changelog(existing.as_deref(), &changelog_section)
+    };
 
     let entry_count = commits
         .iter()
         .filter_map(|c| changelog::parse_conventional_commit(&c.message))
         .filter(|cc| matches!(cc.commit_type.as_str(), "feat" | "fix" | "perf" | "change"))
         .count();
-    output::print_step(&format!("Generated changelog ({entry_count} entries)"));
+    if changelog_already_written {
+        output::print_step(&format!(
+            "Changelog already up-to-date ({entry_count} entries)"
+        ));
+    } else {
+        output::print_step(&format!("Generated changelog ({entry_count} entries)"));
+    }
 
     if dry_run {
         eprintln!("\n--- Dry run: no changes made ---");
