@@ -196,7 +196,13 @@ pub fn changelog_preview() -> Result<()> {
     Ok(())
 }
 
-pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
+pub fn bump(
+    level: BumpLevel,
+    dry_run: bool,
+    skip_checks: bool,
+    no_push: bool,
+    force_resume: bool,
+) -> Result<()> {
     let root = project_root()?;
     let config = Config::load(&root.join("vership.toml"));
     let project = project::detect(&root, config.project.project_type.as_deref())?;
@@ -206,8 +212,17 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
 
     // Calculate versions, detecting whether a previous run was interrupted.
     let on_disk_version = project.read_version(&root)?;
-    let (current_version, new_version, resuming) =
-        detect_resume(&on_disk_version, latest_tag.as_deref(), level, &root)?;
+    let (current_version, new_version, resuming) = if force_resume {
+        // Explicit resume: treat the on-disk version as the target and derive
+        // the previous version from the last git tag (falling back to on-disk).
+        let current = latest_tag
+            .as_deref()
+            .and_then(|t| Version::parse(t.trim_start_matches('v')).ok())
+            .unwrap_or_else(|| on_disk_version.clone());
+        (current, on_disk_version.clone(), true)
+    } else {
+        detect_resume(&on_disk_version, latest_tag.as_deref(), level, &root)?
+    };
     let tag = format!("v{new_version}");
 
     if resuming {

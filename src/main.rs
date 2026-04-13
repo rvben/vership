@@ -45,7 +45,8 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             dry_run,
             skip_checks,
             no_push,
-        } => vership::release::bump(level, dry_run, skip_checks, no_push),
+            resume,
+        } => vership::release::bump(level, dry_run, skip_checks, no_push, resume),
     }
 }
 
@@ -63,11 +64,13 @@ mod tests {
                 dry_run,
                 skip_checks,
                 no_push,
+                resume,
             } => {
                 assert!(matches!(level, BumpLevel::Patch));
                 assert!(!dry_run);
                 assert!(!skip_checks);
                 assert!(!no_push);
+                assert!(!resume);
             }
             _ => panic!("expected Bump"),
         }
@@ -90,6 +93,15 @@ mod tests {
         let cli = Cli::try_parse_from(["vership", "bump", "minor", "--skip-checks"]).unwrap();
         match cli.command {
             Command::Bump { skip_checks, .. } => assert!(skip_checks),
+            _ => panic!("expected Bump"),
+        }
+    }
+
+    #[test]
+    fn cli_bump_resume() {
+        let cli = Cli::try_parse_from(["vership", "bump", "patch", "--resume"]).unwrap();
+        match cli.command {
+            Command::Bump { resume, .. } => assert!(resume),
             _ => panic!("expected Bump"),
         }
     }

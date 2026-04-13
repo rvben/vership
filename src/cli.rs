@@ -27,6 +27,9 @@ pub enum Command {
         /// Stop after tagging, do not push
         #[arg(long)]
         no_push: bool,
+        /// Resume a previously interrupted bump without re-bumping version files
+        #[arg(long)]
+        resume: bool,
     },
     /// Preview changelog for unreleased commits
     Changelog,
