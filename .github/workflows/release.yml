@@ -36,6 +36,9 @@ jobs:
 
   build:
     needs: test
+    # Guard: self-hosted runners only execute on trusted events (tag push,
+    # workflow_dispatch). Fork PRs must never dispatch jobs to self-hosted.
+    if: github.event_name != 'pull_request'
     strategy:
       matrix:
         include:
@@ -44,9 +47,9 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: [self-hosted, macOS, ARM64]
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: [self-hosted, macOS, ARM64]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
