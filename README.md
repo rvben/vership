@@ -68,6 +68,18 @@ vership bump minor    # 0.1.1 → 0.2.0
 vership bump major    # 0.2.0 → 1.0.0
 ```
 
+Initial release? Tag the version already in your manifest:
+
+```bash
+vership release       # tag the current Cargo.toml/package.json version as-is
+```
+
+Interrupted run? Continue where it stopped:
+
+```bash
+vership resume        # finishes commit/tag/push using the on-disk version
+```
+
 Preview before releasing:
 
 ```bash
@@ -81,6 +93,10 @@ vership bump <patch|minor|major>   Bump version, generate changelog, tag, push
   --dry-run                        Preview without making changes
   --skip-checks                    Skip lint and test checks
   --no-push                        Stop after tagging, do not push
+vership release                    Tag the on-disk version as-is (no bump)
+  --dry-run / --skip-checks / --no-push    same as bump
+vership resume                     Finish an interrupted bump (trusts on-disk version)
+  --dry-run / --skip-checks / --no-push    same as bump
 vership changelog                  Preview changelog for unreleased commits
 vership preflight                  Run all pre-flight checks
 vership status                     Show version, project type, unreleased commits
@@ -88,6 +104,11 @@ vership config init                Create vership.toml with defaults
 vership schema                     JSON schema for agent integration
 vership completions <shell>        Generate shell completions
 ```
+
+`bump` auto-detects an interrupted prior run when the on-disk version already
+matches the expected post-bump value AND the working tree is dirty. The
+explicit `resume` subcommand is the escape hatch for cases where auto-detection
+doesn't fire.
 
 ## What It Does
 
