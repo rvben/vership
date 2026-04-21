@@ -16,6 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.0](https://github.com/rvben/vership/compare/v0.4.5...v0.5.0) - 2026-04-21
+
+### Breaking Changes
+
+- **release**: unify bump/resume/release behind a shared plan + executor ([a7ab45b](https://github.com/rvben/vership/commit/a7ab45bfac445a67a00a09d1f993a3b278d22526))
+
 ## [0.4.5](https://github.com/rvben/vership/compare/v0.4.4...v0.4.5) - 2026-04-13
 
 ### Added
