@@ -45,8 +45,17 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             dry_run,
             skip_checks,
             no_push,
-            resume,
-        } => vership::release::bump(level, dry_run, skip_checks, no_push, resume),
+        } => vership::release::bump(level, dry_run, skip_checks, no_push),
+        Command::Release {
+            dry_run,
+            skip_checks,
+            no_push,
+        } => vership::release::release_current(dry_run, skip_checks, no_push),
+        Command::Resume {
+            dry_run,
+            skip_checks,
+            no_push,
+        } => vership::release::resume(dry_run, skip_checks, no_push),
     }
 }
 
@@ -64,13 +73,11 @@ mod tests {
                 dry_run,
                 skip_checks,
                 no_push,
-                resume,
             } => {
                 assert!(matches!(level, BumpLevel::Patch));
                 assert!(!dry_run);
                 assert!(!skip_checks);
                 assert!(!no_push);
-                assert!(!resume);
             }
             _ => panic!("expected Bump"),
         }
@@ -98,12 +105,53 @@ mod tests {
     }
 
     #[test]
-    fn cli_bump_resume() {
-        let cli = Cli::try_parse_from(["vership", "bump", "patch", "--resume"]).unwrap();
+    fn cli_release() {
+        let cli = Cli::try_parse_from(["vership", "release"]).unwrap();
         match cli.command {
-            Command::Bump { resume, .. } => assert!(resume),
-            _ => panic!("expected Bump"),
+            Command::Release {
+                dry_run,
+                skip_checks,
+                no_push,
+            } => {
+                assert!(!dry_run);
+                assert!(!skip_checks);
+                assert!(!no_push);
+            }
+            _ => panic!("expected Release"),
         }
+    }
+
+    #[test]
+    fn cli_release_dry_run() {
+        let cli = Cli::try_parse_from(["vership", "release", "--dry-run"]).unwrap();
+        match cli.command {
+            Command::Release { dry_run, .. } => assert!(dry_run),
+            _ => panic!("expected Release"),
+        }
+    }
+
+    #[test]
+    fn cli_resume() {
+        let cli = Cli::try_parse_from(["vership", "resume"]).unwrap();
+        assert!(matches!(cli.command, Command::Resume { .. }));
+    }
+
+    #[test]
+    fn cli_resume_no_push() {
+        let cli = Cli::try_parse_from(["vership", "resume", "--no-push"]).unwrap();
+        match cli.command {
+            Command::Resume { no_push, .. } => assert!(no_push),
+            _ => panic!("expected Resume"),
+        }
+    }
+
+    #[test]
+    fn cli_bump_no_longer_accepts_resume_flag() {
+        let result = Cli::try_parse_from(["vership", "bump", "patch", "--resume"]);
+        assert!(
+            result.is_err(),
+            "--resume should no longer be a flag on bump"
+        );
     }
 
     #[test]

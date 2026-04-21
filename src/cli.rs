@@ -14,7 +14,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Bump version, generate changelog, tag, and push
+    /// Bump version per `level`, generate changelog, tag, and push.
+    /// Auto-detects an interrupted prior run and continues it.
     Bump {
         /// Version bump level
         level: BumpLevel,
@@ -27,9 +28,32 @@ pub enum Command {
         /// Stop after tagging, do not push
         #[arg(long)]
         no_push: bool,
-        /// Resume a previously interrupted bump without re-bumping version files
+    },
+    /// Tag and release the on-disk version as-is, without bumping.
+    /// Use for initial releases or when the version was set manually.
+    Release {
+        /// Preview changes without modifying anything
         #[arg(long)]
-        resume: bool,
+        dry_run: bool,
+        /// Skip lint and test checks
+        #[arg(long)]
+        skip_checks: bool,
+        /// Stop after tagging, do not push
+        #[arg(long)]
+        no_push: bool,
+    },
+    /// Resume an interrupted bump. Trusts the on-disk version as the target
+    /// and finishes the commit/tag/push flow.
+    Resume {
+        /// Preview changes without modifying anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip lint and test checks
+        #[arg(long)]
+        skip_checks: bool,
+        /// Stop after tagging, do not push
+        #[arg(long)]
+        no_push: bool,
     },
     /// Preview changelog for unreleased commits
     Changelog,

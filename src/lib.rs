@@ -7,6 +7,7 @@ pub mod error;
 pub mod git;
 pub mod hooks;
 pub mod output;
+pub mod planning;
 pub mod project;
 pub mod release;
 pub mod schema;
