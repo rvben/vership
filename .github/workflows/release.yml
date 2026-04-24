@@ -61,8 +61,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
       - name: Install maturin and zig
-        run: pip install maturin ziglang
+        shell: bash
+        run: |
+          uv venv "${RUNNER_TEMP}/build-venv"
+          uv pip install --python "${RUNNER_TEMP}/build-venv/bin/python" maturin ziglang
+          echo "${RUNNER_TEMP}/build-venv/bin" >> "$GITHUB_PATH"
       - name: Build wheel
         shell: bash
         run: |
@@ -98,8 +104,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
       - name: Install maturin
-        run: pip install maturin
+        shell: bash
+        run: |
+          uv venv "${RUNNER_TEMP}/build-venv"
+          uv pip install --python "${RUNNER_TEMP}/build-venv/bin/python" maturin
+          echo "${RUNNER_TEMP}/build-venv/bin" >> "$GITHUB_PATH"
       - name: Build sdist
         run: maturin sdist
       - uses: actions/upload-artifact@v4
