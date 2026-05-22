@@ -218,6 +218,84 @@ pub fn prepend_to_changelog(existing: Option<&str>, new_section: &str) -> String
     }
 }
 
+/// Merge a generated release section into an existing CHANGELOG.md.
+///
+/// When the file follows the "Keep a Changelog" convention with a
+/// `## [Unreleased]` section, that section is *promoted* into the release:
+/// its heading becomes the new version's heading, a fresh empty
+/// `## [Unreleased]` is inserted at the top, and any hand-curated entries are
+/// preserved. The generated section is only used to supply the version heading
+/// (and, when `[Unreleased]` is empty, its body).
+///
+/// When there is no `## [Unreleased]` section, the generated section is simply
+/// prepended above the most recent release (legacy behaviour).
+pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> String {
+    let Some(content) = existing else {
+        return prepend_to_changelog(None, new_section);
+    };
+
+    // Locate the `## [Unreleased]` heading line, if any.
+    let unreleased_re = Regex::new(r"(?m)^## \[Unreleased\][^\n]*$").expect("valid regex");
+    let Some(m) = unreleased_re.find(content) else {
+        return prepend_to_changelog(Some(content), new_section);
+    };
+
+    let preamble = &content[..m.start()];
+    // Everything after the [Unreleased] heading line.
+    let after_heading = &content[m.end()..];
+
+    // The [Unreleased] body runs until the next `## ` heading (or end of file).
+    let next_heading = Regex::new(r"(?m)^## ").expect("valid regex");
+    let (unreleased_body, rest) = match next_heading.find(after_heading) {
+        Some(h) => (&after_heading[..h.start()], &after_heading[h.start()..]),
+        None => (after_heading, ""),
+    };
+
+    // Split the generated section into its heading line and body.
+    let new_header = new_section.lines().next().unwrap_or(new_section);
+
+    let promoted = if unreleased_body.trim().is_empty() {
+        // Nothing curated: fill the promoted slot with the generated section.
+        format!("{}\n\n", new_section.trim_end())
+    } else {
+        // Curated content wins; reuse only the generated heading.
+        format!("{new_header}{}", trim_trailing_blank_lines(unreleased_body))
+    };
+
+    let rest = rest.trim_start_matches('\n');
+    let mut result = format!("{preamble}## [Unreleased]\n\n{promoted}");
+    if !rest.is_empty() {
+        result.push_str("\n\n");
+        result.push_str(rest);
+    }
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
+/// Trim trailing blank lines but keep a single trailing newline, so a curated
+/// `[Unreleased]` body slots cleanly before the next heading.
+fn trim_trailing_blank_lines(body: &str) -> String {
+    format!("{}\n", body.trim_end())
+}
+
+/// Extract the changelog section for `version` from a full document: from its
+/// `## [version]` heading up to (but not including) the next `## ` heading.
+/// Useful for previewing exactly what a release section will contain.
+pub fn extract_section<'a>(content: &'a str, version: &str) -> Option<&'a str> {
+    let heading = format!("## [{version}]");
+    let start = content.find(&heading)?;
+    let rest = &content[start..];
+    let body_start = rest.find('\n').map(|i| i + 1).unwrap_or(rest.len());
+    let next = Regex::new(r"(?m)^## ")
+        .expect("valid regex")
+        .find(&rest[body_start..])
+        .map(|m| body_start + m.start())
+        .unwrap_or(rest.len());
+    Some(rest[..next].trim_end())
+}
+
 /// Check if a CHANGELOG.md already has an entry for the given version.
 pub fn version_exists_in_changelog(content: &str, version: &str) -> bool {
     content.contains(&format!("## [{version}]"))

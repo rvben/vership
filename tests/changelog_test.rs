@@ -1,5 +1,6 @@
 use vership::changelog::{
-    ConventionalCommit, generate_changelog, generate_changelog_with_mode, parse_conventional_commit,
+    ConventionalCommit, extract_section, generate_changelog, generate_changelog_with_mode,
+    integrate_changelog, parse_conventional_commit,
 };
 use vership::git::Commit;
 
@@ -330,4 +331,93 @@ fn exclude_mode_silently_skips_non_conventional() {
     assert!(changelog.contains("### Added"));
     assert!(!changelog.contains("### Other"));
     assert!(!changelog.contains("This is not conventional"));
+}
+
+// --- integrate_changelog: [Unreleased] promotion ---
+
+#[test]
+fn integrate_no_existing_file_creates_header() {
+    let section = "## [1.0.0] - 2026-05-22\n\n### Added\n\n- thing\n";
+    let result = integrate_changelog(None, section);
+    assert!(result.starts_with("# Changelog"));
+    assert!(result.contains("## [1.0.0] - 2026-05-22"));
+}
+
+#[test]
+fn integrate_without_unreleased_prepends_above_latest() {
+    let existing = "# Changelog\n\n## [0.9.0] - 2026-01-01\n\n### Added\n\n- old\n";
+    let section = "## [1.0.0] - 2026-05-22\n\n### Added\n\n- new\n";
+    let result = integrate_changelog(Some(existing), section);
+
+    let new_pos = result.find("## [1.0.0]").unwrap();
+    let old_pos = result.find("## [0.9.0]").unwrap();
+    assert!(
+        new_pos < old_pos,
+        "new release must sit above the prior one"
+    );
+    assert!(!result.contains("## [Unreleased]"));
+}
+
+#[test]
+fn integrate_promotes_curated_unreleased_content() {
+    let existing = "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- hand written fix\n\n## [0.1.5] - 2026-05-01\n\n### Added\n\n- prior\n";
+    // Generated section body is intentionally different to prove curated content wins.
+    let section = "## [0.1.6](https://example.com/compare/v0.1.5...v0.1.6) - 2026-05-22\n\n### Added\n\n- generated entry that should NOT appear\n";
+    let result = integrate_changelog(Some(existing), section);
+
+    // A fresh empty [Unreleased] sits at the top.
+    let unreleased_pos = result.find("## [Unreleased]").unwrap();
+    let release_pos = result.find("## [0.1.6]").unwrap();
+    let prior_pos = result.find("## [0.1.5]").unwrap();
+    assert!(unreleased_pos < release_pos);
+    assert!(release_pos < prior_pos);
+
+    // The promoted section keeps the curated content and the generated header (with link).
+    assert!(result.contains("- hand written fix"));
+    assert!(
+        result.contains("## [0.1.6](https://example.com/compare/v0.1.5...v0.1.6) - 2026-05-22")
+    );
+    // Curated content wins: the generated body is discarded.
+    assert!(!result.contains("generated entry that should NOT appear"));
+}
+
+#[test]
+fn integrate_empty_unreleased_falls_back_to_generated_body() {
+    let existing =
+        "# Changelog\n\n## [Unreleased]\n\n## [0.1.5] - 2026-05-01\n\n### Added\n\n- prior\n";
+    let section = "## [0.1.6] - 2026-05-22\n\n### Fixed\n\n- generated fix\n";
+    let result = integrate_changelog(Some(existing), section);
+
+    let unreleased_pos = result.find("## [Unreleased]").unwrap();
+    let release_pos = result.find("## [0.1.6]").unwrap();
+    let prior_pos = result.find("## [0.1.5]").unwrap();
+    assert!(unreleased_pos < release_pos);
+    assert!(release_pos < prior_pos);
+    // With nothing curated, the generated body fills the new release.
+    assert!(result.contains("- generated fix"));
+}
+
+#[test]
+fn extract_section_returns_promoted_release_for_preview() {
+    let existing = "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- hand written fix\n\n## [0.1.5] - 2026-05-01\n\n### Added\n\n- prior\n";
+    let section = "## [0.1.6] - 2026-05-22\n\n### Added\n\n- generated\n";
+    let full = integrate_changelog(Some(existing), section);
+
+    let preview = extract_section(&full, "0.1.6").unwrap();
+    assert!(preview.starts_with("## [0.1.6] - 2026-05-22"));
+    assert!(preview.contains("- hand written fix"));
+    // Must stop before the next release heading.
+    assert!(!preview.contains("## [0.1.5]"));
+    assert!(!preview.contains("## [Unreleased]"));
+}
+
+#[test]
+fn integrate_promotion_keeps_single_unreleased_heading() {
+    let existing = "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- curated change\n";
+    let section = "## [2.0.0] - 2026-05-22\n\n### Changed\n\n- gen\n";
+    let result = integrate_changelog(Some(existing), section);
+
+    assert_eq!(result.matches("## [Unreleased]").count(), 1);
+    assert!(result.contains("- curated change"));
+    assert!(result.contains("## [2.0.0] - 2026-05-22"));
 }

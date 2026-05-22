@@ -274,7 +274,7 @@ fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
     let full_changelog = if changelog_already_written {
         existing.clone().unwrap_or_default()
     } else {
-        changelog::prepend_to_changelog(existing.as_deref(), &changelog_section)
+        changelog::integrate_changelog(existing.as_deref(), &changelog_section)
     };
 
     let entry_count = commits
@@ -293,7 +293,11 @@ fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
     if opts.dry_run {
         eprintln!("\n--- Dry run: no changes made ---");
         eprintln!("\nChangelog preview:\n");
-        eprintln!("{changelog_section}");
+        // Show the section as it will actually land, so a promoted `[Unreleased]`
+        // block (curated content) previews correctly rather than the generated draft.
+        let preview = changelog::extract_section(&full_changelog, &plan.target.to_string())
+            .unwrap_or(&changelog_section);
+        eprintln!("{preview}");
         return Ok(());
     }
 
