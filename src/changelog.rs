@@ -218,6 +218,17 @@ pub fn prepend_to_changelog(existing: Option<&str>, new_section: &str) -> String
     }
 }
 
+/// Outcome of merging a generated release section into a CHANGELOG.md.
+pub struct ChangelogUpdate {
+    /// The full updated changelog document.
+    pub content: String,
+    /// True when a curated `## [Unreleased]` section was promoted into the
+    /// release, carrying its hand-written entries forward. False when the
+    /// `[Unreleased]` section was empty (the generated body was used) or
+    /// absent (legacy prepend).
+    pub promoted: bool,
+}
+
 /// Merge a generated release section into an existing CHANGELOG.md.
 ///
 /// When the file follows the "Keep a Changelog" convention with a
@@ -229,15 +240,21 @@ pub fn prepend_to_changelog(existing: Option<&str>, new_section: &str) -> String
 ///
 /// When there is no `## [Unreleased]` section, the generated section is simply
 /// prepended above the most recent release (legacy behaviour).
-pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> String {
+pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> ChangelogUpdate {
     let Some(content) = existing else {
-        return prepend_to_changelog(None, new_section);
+        return ChangelogUpdate {
+            content: prepend_to_changelog(None, new_section),
+            promoted: false,
+        };
     };
 
     // Locate the `## [Unreleased]` heading line, if any.
     let unreleased_re = Regex::new(r"(?m)^## \[Unreleased\][^\n]*$").expect("valid regex");
     let Some(m) = unreleased_re.find(content) else {
-        return prepend_to_changelog(Some(content), new_section);
+        return ChangelogUpdate {
+            content: prepend_to_changelog(Some(content), new_section),
+            promoted: false,
+        };
     };
 
     let preamble = &content[..m.start()];
@@ -254,16 +271,17 @@ pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> String 
     // Split the generated section into its heading line and body.
     let new_header = new_section.lines().next().unwrap_or(new_section);
 
-    let promoted = if unreleased_body.trim().is_empty() {
-        // Nothing curated: fill the promoted slot with the generated section.
-        format!("{}\n\n", new_section.trim_end())
-    } else {
+    let curated = !unreleased_body.trim().is_empty();
+    let promoted_section = if curated {
         // Curated content wins; reuse only the generated heading.
         format!("{new_header}{}", trim_trailing_blank_lines(unreleased_body))
+    } else {
+        // Nothing curated: fill the promoted slot with the generated section.
+        format!("{}\n\n", new_section.trim_end())
     };
 
     let rest = rest.trim_start_matches('\n');
-    let mut result = format!("{preamble}## [Unreleased]\n\n{promoted}");
+    let mut result = format!("{preamble}## [Unreleased]\n\n{promoted_section}");
     if !rest.is_empty() {
         result.push_str("\n\n");
         result.push_str(rest);
@@ -271,7 +289,10 @@ pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> String 
     if !result.ends_with('\n') {
         result.push('\n');
     }
-    result
+    ChangelogUpdate {
+        content: result,
+        promoted: curated,
+    }
 }
 
 /// Trim trailing blank lines but keep a single trailing newline, so a curated

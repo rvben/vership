@@ -271,10 +271,11 @@ fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
     let changelog_already_written = existing
         .as_deref()
         .is_some_and(|c| changelog::version_exists_in_changelog(c, &plan.target.to_string()));
-    let full_changelog = if changelog_already_written {
-        existing.clone().unwrap_or_default()
+    let (full_changelog, promoted) = if changelog_already_written {
+        (existing.clone().unwrap_or_default(), false)
     } else {
-        changelog::integrate_changelog(existing.as_deref(), &changelog_section)
+        let update = changelog::integrate_changelog(existing.as_deref(), &changelog_section);
+        (update.content, update.promoted)
     };
 
     let entry_count = commits
@@ -286,6 +287,8 @@ fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
         output::print_step(&format!(
             "Changelog already up-to-date ({entry_count} entries)"
         ));
+    } else if promoted {
+        output::print_step("Promoted [Unreleased] section");
     } else {
         output::print_step(&format!("Generated changelog ({entry_count} entries)"));
     }
