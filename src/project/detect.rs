@@ -4,6 +4,7 @@ use crate::error::{Error, Result};
 
 use super::ProjectType;
 use super::go::GoProject;
+use super::gradle::GradleProject;
 use super::node::NodeProject;
 use super::python::PythonProject;
 use super::rust::RustProject;
@@ -12,7 +13,7 @@ use super::rust_maturin::RustMaturinProject;
 /// Detect the project type rooted at `root`.
 ///
 /// When `project_type_override` is provided it takes precedence over auto-detection.
-/// Accepted values: `"rust"`, `"rust-maturin"`, `"node"`, `"go"`, `"python"`.
+/// Accepted values: `"rust"`, `"rust-maturin"`, `"node"`, `"go"`, `"python"`, `"gradle"`.
 pub fn detect(root: &Path, project_type_override: Option<&str>) -> Result<Box<dyn ProjectType>> {
     if let Some(override_type) = project_type_override {
         return match override_type {
@@ -21,8 +22,9 @@ pub fn detect(root: &Path, project_type_override: Option<&str>) -> Result<Box<dy
             "node" => Ok(Box::new(NodeProject::new())),
             "go" => Ok(Box::new(GoProject::new())),
             "python" => Ok(Box::new(PythonProject::new())),
+            "gradle" => Ok(Box::new(GradleProject::new())),
             other => Err(Error::Config(format!(
-                "unknown project type '{other}': valid values are \"rust\", \"rust-maturin\", \"node\", \"go\", \"python\""
+                "unknown project type '{other}': valid values are \"rust\", \"rust-maturin\", \"node\", \"go\", \"python\", \"gradle\""
             ))),
         };
     }
@@ -61,8 +63,19 @@ pub fn detect(root: &Path, project_type_override: Option<&str>) -> Result<Box<dy
         return Ok(Box::new(PythonProject::new()));
     }
 
+    // 6. Gradle build/settings script → Gradle
+    let gradle_markers = [
+        "build.gradle.kts",
+        "build.gradle",
+        "settings.gradle.kts",
+        "settings.gradle",
+    ];
+    if gradle_markers.iter().any(|m| root.join(m).exists()) {
+        return Ok(Box::new(GradleProject::new()));
+    }
+
     Err(Error::Other(
-        "No supported project type detected. Supported: Rust, Rust+Maturin, Node, Go, Python."
+        "No supported project type detected. Supported: Rust, Rust+Maturin, Node, Go, Python, Gradle."
             .to_string(),
     ))
 }

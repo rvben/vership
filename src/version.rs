@@ -26,6 +26,51 @@ pub fn replace_package_json_version(content: &str, new_version: &Version) -> Str
         .to_string()
 }
 
+/// Read the value of a `key=value` (or `key: value`) entry in a
+/// gradle.properties file. Matching is anchored to the start of a line so
+/// `version` never matches `pluginVersion`.
+pub fn parse_gradle_property(content: &str, key: &str) -> Option<String> {
+    let re = Regex::new(&format!(r"(?m)^\s*{}\s*[=:]\s*(\S+)", regex::escape(key)))
+        .expect("valid regex");
+    re.captures(content).map(|c| c[1].trim().to_string())
+}
+
+/// Replace the value of `key` in a gradle.properties file, preserving the
+/// surrounding key, separator, and other lines. Returns None if the key is absent.
+pub fn replace_gradle_property(content: &str, key: &str, new_version: &Version) -> Option<String> {
+    let re = Regex::new(&format!(r"(?m)^(\s*{}\s*[=:]\s*)\S+", regex::escape(key)))
+        .expect("valid regex");
+    if re.is_match(content) {
+        Some(
+            re.replace(content, format!("${{1}}{new_version}"))
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
+/// Read a `version = "x.y.z"` (or single-quoted, or no `=` Groovy form)
+/// assignment from a build.gradle / build.gradle.kts script.
+pub fn parse_gradle_buildscript_version(content: &str) -> Option<String> {
+    let re = Regex::new(r#"(?m)^\s*version\s*=?\s*["']([^"']+)["']"#).expect("valid regex");
+    re.captures(content).map(|c| c[1].to_string())
+}
+
+/// Replace the `version` assignment in a build.gradle / build.gradle.kts script.
+/// Returns None if no such assignment exists.
+pub fn replace_gradle_buildscript_version(content: &str, new_version: &Version) -> Option<String> {
+    let re = Regex::new(r#"(?m)^(\s*version\s*=?\s*["'])[^"']+(["'])"#).expect("valid regex");
+    if re.is_match(content) {
+        Some(
+            re.replace(content, format!("${{1}}{new_version}${{2}}"))
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
 pub fn bump(version: Version, level: BumpLevel) -> Version {
     match level {
         BumpLevel::Patch => Version::new(version.major, version.minor, version.patch + 1),
