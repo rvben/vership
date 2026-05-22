@@ -17,6 +17,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.1](https://github.com/rvben/vership/compare/v0.5.0...v0.5.1) - 2026-05-22
+
+### Added
+
+- **changelog**: report [Unreleased] promotion in release status ([f7a3004](https://github.com/rvben/vership/commit/f7a3004f9d8449059a4018c17a41890a5aefc469))
+- **changelog**: promote [Unreleased] section on release ([f001587](https://github.com/rvben/vership/commit/f00158722939bc2f48770ef4d68ad3f1ae125ddf))
+- **project**: add Gradle / JetBrains plugin project type ([7b855b0](https://github.com/rvben/vership/commit/7b855b076adc0150ebcbe8efc551bc29ef10ad5e))
+
 ## [0.5.0](https://github.com/rvben/vership/compare/v0.4.5...v0.5.0) - 2026-04-21
 
 ### Breaking Changes
