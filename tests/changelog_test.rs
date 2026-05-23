@@ -495,6 +495,61 @@ fn integrate_strips_stale_version_link_refs_on_promotion() {
 }
 
 #[test]
+fn integrate_preserves_numeric_footnote_link_refs() {
+    // Numeric reference definitions like `[1]:` / `[123]:` are footnote or
+    // issue links, NOT version refs. A version label always has a major.minor
+    // shape, so a bare integer label must be preserved on promotion.
+    let existing = "# Changelog\n\
+        \n\
+        ## [Unreleased]\n\
+        \n\
+        ### Fixed\n\
+        \n\
+        - fix referencing a footnote[^1]\n\
+        \n\
+        ## [0.1.5] - 2026-05-01\n\
+        \n\
+        ### Added\n\
+        \n\
+        - prior\n\
+        \n\
+        [Unreleased]: https://github.com/o/r/compare/v0.1.5...HEAD\n\
+        [0.1.5]: https://github.com/o/r/releases/tag/v0.1.5\n\
+        [1]: https://github.com/o/r/issues/1\n\
+        [123]: https://example.com/footnote\n";
+    let section = "## [0.1.6](https://github.com/o/r/compare/v0.1.5...v0.1.6) - 2026-05-22\n\n### Added\n\n- gen\n";
+    let result = integrate_changelog(Some(existing), section);
+
+    // Version refs are stripped.
+    assert!(
+        !result
+            .content
+            .contains("[Unreleased]: https://github.com/o/r/compare/v0.1.5...HEAD")
+    );
+    assert!(
+        !result
+            .content
+            .contains("[0.1.5]: https://github.com/o/r/releases/tag/v0.1.5")
+    );
+
+    // Numeric footnote/issue refs are not versions and must survive.
+    assert!(
+        result
+            .content
+            .contains("[1]: https://github.com/o/r/issues/1"),
+        "numeric footnote ref [1] must be preserved, got:\n{}",
+        result.content
+    );
+    assert!(
+        result
+            .content
+            .contains("[123]: https://example.com/footnote"),
+        "numeric footnote ref [123] must be preserved, got:\n{}",
+        result.content
+    );
+}
+
+#[test]
 fn integrate_promotion_keeps_single_unreleased_heading() {
     let existing = "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- curated change\n";
     let section = "## [2.0.0] - 2026-05-22\n\n### Changed\n\n- gen\n";

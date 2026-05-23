@@ -298,12 +298,16 @@ pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> Changel
 }
 
 /// Remove changelog version link-reference definitions: the bottom
-/// `[Unreleased]: <url>` and `[x.y.z]: <url>` lines. Lines whose label is not
-/// `Unreleased` and does not look like a version (optional `v` then a digit)
-/// are kept, so prose references such as `[contributing]: <url>` survive.
-/// Collapses any blank lines left behind into a single trailing newline.
+/// `[Unreleased]: <url>` and `[x.y.z]: <url>` lines. A version label is
+/// `Unreleased` or a `MAJOR.MINOR(.PATCH)` number with an optional `v` prefix
+/// and optional pre-release/build suffix. Labels without that shape are kept,
+/// so prose references such as `[contributing]:` and numeric footnote/issue
+/// refs such as `[1]:` survive. Collapses any blank lines left behind into a
+/// single trailing newline.
 fn strip_version_link_refs(content: &str) -> String {
-    let ref_re = Regex::new(r"^\[(?:Unreleased|v?\d[0-9A-Za-z.+-]*)\]:\s+\S").expect("valid regex");
+    let ref_re =
+        Regex::new(r"^\[(?:Unreleased|v?\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)\]:\s+\S")
+            .expect("valid regex");
     let kept: Vec<&str> = content
         .lines()
         .filter(|line| !ref_re.is_match(line))
