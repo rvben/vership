@@ -174,8 +174,16 @@ jobs:
 
       - name: Update Homebrew formula
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
+          # Authenticate to the tap with a write deploy key. The key never
+          # expires and is scoped to rvben/homebrew-tap only, so cross-repo
+          # pushes keep working without periodic token rotation.
+          mkdir -p ~/.ssh
+          echo "$HOMEBREW_TAP_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+
           VERSION="${{ github.ref_name }}"
           VERSION_NUM="${VERSION#v}"
 
@@ -224,7 +232,7 @@ jobs:
           sed -i "s/SHA_X86_64_UNKNOWN_LINUX_GNU/${{ steps.hashes.outputs.x86_64_unknown_linux_gnu }}/g" /tmp/vership.rb
 
           # Clone tap repo, update formula, push
-          git clone https://x-access-token:${GH_TOKEN}@github.com/rvben/homebrew-tap.git /tmp/tap
+          git clone git@github.com:rvben/homebrew-tap.git /tmp/tap
           mkdir -p /tmp/tap/Formula
           cp /tmp/vership.rb /tmp/tap/Formula/vership.rb
           cd /tmp/tap
