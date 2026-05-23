@@ -550,6 +550,46 @@ fn integrate_preserves_numeric_footnote_link_refs() {
 }
 
 #[test]
+fn integrate_strips_full_semver_version_link_refs() {
+    // A version with both a prerelease and build-metadata suffix is still a
+    // version vership can release, so its bottom link-ref must be stripped too.
+    let existing = "# Changelog\n\
+        \n\
+        ## [Unreleased]\n\
+        \n\
+        ### Fixed\n\
+        \n\
+        - curated\n\
+        \n\
+        ## [1.2.3-alpha.1+build.5] - 2026-05-01\n\
+        \n\
+        ### Added\n\
+        \n\
+        - prior\n\
+        \n\
+        [Unreleased]: https://github.com/o/r/compare/v1.2.3-alpha.1+build.5...HEAD\n\
+        [1.2.3-alpha.1+build.5]: https://github.com/o/r/releases/tag/v1.2.3-alpha.1+build.5\n";
+    let section = "## [1.2.4](https://github.com/o/r/compare/v1.2.3...v1.2.4) - 2026-05-22\n\n### Added\n\n- gen\n";
+    let result = integrate_changelog(Some(existing), section);
+
+    assert!(result.promoted);
+    assert!(
+        !result.content.contains(
+            "[1.2.3-alpha.1+build.5]: https://github.com/o/r/releases/tag/v1.2.3-alpha.1+build.5"
+        ),
+        "full-semver version link-ref must be stripped, got:\n{}",
+        result.content
+    );
+    assert!(
+        !result
+            .content
+            .contains("[Unreleased]: https://github.com/o/r/compare/v1.2.3-alpha.1+build.5...HEAD"),
+        "stale [Unreleased] ref must be stripped, got:\n{}",
+        result.content
+    );
+}
+
+#[test]
 fn integrate_promotion_keeps_single_unreleased_heading() {
     let existing = "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- curated change\n";
     let section = "## [2.0.0] - 2026-05-22\n\n### Changed\n\n- gen\n";

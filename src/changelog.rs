@@ -305,9 +305,10 @@ pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> Changel
 /// refs such as `[1]:` survive. Collapses any blank lines left behind into a
 /// single trailing newline.
 fn strip_version_link_refs(content: &str) -> String {
-    let ref_re =
-        Regex::new(r"^\[(?:Unreleased|v?\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)\]:\s+\S")
-            .expect("valid regex");
+    let ref_re = Regex::new(
+        r"^\[(?:Unreleased|v?\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\]:\s+\S",
+    )
+    .expect("valid regex");
     let kept: Vec<&str> = content
         .lines()
         .filter(|line| !ref_re.is_match(line))
