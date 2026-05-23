@@ -431,6 +431,70 @@ fn extract_section_returns_promoted_release_for_preview() {
 }
 
 #[test]
+fn integrate_strips_stale_version_link_refs_on_promotion() {
+    // A Keep-a-Changelog file carrying bottom link-reference definitions:
+    // the [Unreleased] ref points at the now-stale compare range, the prior
+    // version has its own ref, and a non-version ref (CONTRIBUTING) coexists.
+    let existing = "# Changelog\n\
+        \n\
+        ## [Unreleased]\n\
+        \n\
+        ### Fixed\n\
+        \n\
+        - curated fix\n\
+        \n\
+        ## [0.1.5] - 2026-05-01\n\
+        \n\
+        ### Added\n\
+        \n\
+        - prior\n\
+        \n\
+        [Unreleased]: https://github.com/o/r/compare/v0.1.5...HEAD\n\
+        [0.1.5]: https://github.com/o/r/releases/tag/v0.1.5\n\
+        [contributing]: https://github.com/o/r/blob/main/CONTRIBUTING.md\n";
+    let section = "## [0.1.6](https://github.com/o/r/compare/v0.1.5...v0.1.6) - 2026-05-22\n\n### Added\n\n- gen\n";
+    let result = integrate_changelog(Some(existing), section);
+
+    // Promotion happened as before.
+    assert!(result.promoted);
+    assert!(result.content.contains("- curated fix"));
+    assert!(
+        result
+            .content
+            .contains("## [0.1.6](https://github.com/o/r/compare/v0.1.5...v0.1.6) - 2026-05-22")
+    );
+
+    // The stale version link-reference definitions are gone: the inline-linked
+    // headers are self-contained, so these would only drift out of date.
+    assert!(
+        !result
+            .content
+            .contains("[Unreleased]: https://github.com/o/r/compare/v0.1.5...HEAD"),
+        "stale [Unreleased] link-ref must be stripped"
+    );
+    assert!(
+        !result
+            .content
+            .contains("[0.1.5]: https://github.com/o/r/releases/tag/v0.1.5"),
+        "version link-ref definition must be stripped"
+    );
+
+    // Non-version link-reference definitions are preserved untouched.
+    assert!(
+        result
+            .content
+            .contains("[contributing]: https://github.com/o/r/blob/main/CONTRIBUTING.md"),
+        "non-version link-ref must be preserved"
+    );
+
+    // The [Unreleased] *heading* (not the link-ref) still leads the document.
+    assert_eq!(result.content.matches("## [Unreleased]").count(), 1);
+    // No trailing blank-line cruft left where the ref block used to be.
+    assert!(result.content.ends_with("CONTRIBUTING.md\n"));
+    assert!(!result.content.ends_with("\n\n"));
+}
+
+#[test]
 fn integrate_promotion_keeps_single_unreleased_heading() {
     let existing = "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- curated change\n";
     let section = "## [2.0.0] - 2026-05-22\n\n### Changed\n\n- gen\n";

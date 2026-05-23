@@ -131,3 +131,96 @@ fn bump_promotes_curated_unreleased_section() {
         "gradle.properties bumped, got:\n{props}"
     );
 }
+
+/// Drive the real `vership` binary against a CHANGELOG that carries bottom
+/// link-reference definitions. The inline-linked headers vership writes are
+/// self-contained, so the stale `[Unreleased]:` / `[x.y.z]:` refs must be
+/// stripped on disk while prose refs survive. Exercises the production path.
+#[test]
+fn bump_strips_stale_changelog_link_refs() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    init_repo(root);
+
+    fs::write(
+        root.join("settings.gradle.kts"),
+        "rootProject.name = \"demo\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("gradle.properties"),
+        "pluginGroup=com.example\npluginVersion=0.1.5\n",
+    )
+    .unwrap();
+
+    let changelog = "\
+# Changelog
+
+## [Unreleased]
+
+### Fixed
+
+- curated fix
+
+## [0.1.5] - 2026-05-01
+
+### Added
+
+- prior release entry
+
+[Unreleased]: https://github.com/o/r/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/o/r/releases/tag/v0.1.5
+[contributing]: https://github.com/o/r/blob/main/CONTRIBUTING.md
+";
+    fs::write(root.join("CHANGELOG.md"), changelog).unwrap();
+
+    git(
+        root,
+        &[
+            "add",
+            "settings.gradle.kts",
+            "gradle.properties",
+            "CHANGELOG.md",
+        ],
+    );
+    git(root, &["commit", "-m", "chore: initial"]);
+    git(root, &["tag", "-a", "v0.1.5", "-m", "v0.1.5"]);
+
+    fs::write(root.join("source.txt"), "change").unwrap();
+    git(root, &["add", "source.txt"]);
+    git(root, &["commit", "-m", "fix: real bug fix since release"]);
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--no-push"])
+        .assert()
+        .success();
+
+    let written = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+
+    // Promotion still works through the real path.
+    assert!(written.contains("- curated fix"));
+    assert!(written.contains("## [0.1.6]"));
+
+    // Stale version link-reference definitions are stripped on disk.
+    assert!(
+        !written.contains("[Unreleased]: https://github.com/o/r/compare/v0.1.5...HEAD"),
+        "stale [Unreleased] ref must be gone, got:\n{written}"
+    );
+    assert!(
+        !written.contains("[0.1.5]: https://github.com/o/r/releases/tag/v0.1.5"),
+        "version ref must be gone, got:\n{written}"
+    );
+
+    // Prose link-reference definitions survive.
+    assert!(
+        written.contains("[contributing]: https://github.com/o/r/blob/main/CONTRIBUTING.md"),
+        "non-version ref must be preserved, got:\n{written}"
+    );
+
+    // Exactly one [Unreleased] heading remains and no trailing blank cruft.
+    assert_eq!(written.matches("## [Unreleased]").count(), 1);
+    assert!(written.ends_with("CONTRIBUTING.md\n"));
+    assert!(!written.ends_with("\n\n"));
+}

@@ -286,13 +286,29 @@ pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> Changel
         result.push_str("\n\n");
         result.push_str(rest);
     }
-    if !result.ends_with('\n') {
-        result.push('\n');
-    }
+    // vership emits self-contained inline-linked version headers, so any bottom
+    // `[Unreleased]:` / `[x.y.z]:` link-reference definitions are redundant and
+    // drift out of date on every promotion. Strip them, leaving a clean trailing
+    // newline. Non-version link-reference definitions are preserved.
+    let result = strip_version_link_refs(&result);
     ChangelogUpdate {
         content: result,
         promoted: curated,
     }
+}
+
+/// Remove changelog version link-reference definitions: the bottom
+/// `[Unreleased]: <url>` and `[x.y.z]: <url>` lines. Lines whose label is not
+/// `Unreleased` and does not look like a version (optional `v` then a digit)
+/// are kept, so prose references such as `[contributing]: <url>` survive.
+/// Collapses any blank lines left behind into a single trailing newline.
+fn strip_version_link_refs(content: &str) -> String {
+    let ref_re = Regex::new(r"^\[(?:Unreleased|v?\d[0-9A-Za-z.+-]*)\]:\s+\S").expect("valid regex");
+    let kept: Vec<&str> = content
+        .lines()
+        .filter(|line| !ref_re.is_match(line))
+        .collect();
+    format!("{}\n", kept.join("\n").trim_end())
 }
 
 /// Trim trailing blank lines but keep a single trailing newline, so a curated
