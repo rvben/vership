@@ -18,6 +18,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.2](https://github.com/rvben/vership/compare/v0.5.1...v0.5.2) - 2026-05-23
+
+### Added
+
+- **changelog**: strip stale version link-ref definitions on promotion ([3152810](https://github.com/rvben/vership/commit/31528104ed1d0dd5ba5ef77786041328e11ab0f6))
+
+### Fixed
+
+- **changelog**: strip semver refs with prerelease and build metadata ([bc9e9f4](https://github.com/rvben/vership/commit/bc9e9f4278dcdb772651f2b79af27d8e4170c72b))
+- **changelog**: only strip MAJOR.MINOR-shaped version link-refs ([e888ea9](https://github.com/rvben/vership/commit/e888ea9ce0c50f2fbf35c2835e1b6438cafd9646))
+
 ## [0.5.1](https://github.com/rvben/vership/compare/v0.5.0...v0.5.1) - 2026-05-22
 
 ### Added
