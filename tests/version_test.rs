@@ -101,6 +101,43 @@ serde = { version = "1.0" }
 }
 
 #[test]
+fn parse_version_from_pure_workspace_cargo_toml() {
+    // A pure-workspace root has no [package] table; the version lives in
+    // [workspace.package]. This is the common layout for multi-crate workspaces.
+    let content = r#"
+[workspace]
+members = ["crates/foo", "crates/bar"]
+resolver = "3"
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+"#;
+    let version = parse_cargo_toml_version(content).unwrap();
+    assert_eq!(version, Version::new(0, 3, 0));
+}
+
+#[test]
+fn parse_version_falls_back_to_workspace_when_package_inherits() {
+    // A crate that is also the workspace root: [package].version inherits from the
+    // workspace via `version.workspace = true`, and the real version is in
+    // [workspace.package].
+    let content = r#"
+[package]
+name = "root-crate"
+version.workspace = true
+
+[workspace]
+members = ["."]
+
+[workspace.package]
+version = "1.4.2"
+"#;
+    let version = parse_cargo_toml_version(content).unwrap();
+    assert_eq!(version, Version::new(1, 4, 2));
+}
+
+#[test]
 fn replace_pyproject_version_with_static_version() {
     let content = r#"[project]
 name = "example"

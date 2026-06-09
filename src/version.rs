@@ -81,19 +81,52 @@ pub fn bump(version: Version, level: BumpLevel) -> Version {
 
 #[derive(Deserialize)]
 struct CargoToml {
-    package: CargoPackage,
+    package: Option<CargoPackage>,
+    workspace: Option<CargoWorkspace>,
+}
+
+#[derive(Deserialize)]
+struct CargoWorkspace {
+    package: Option<CargoPackage>,
 }
 
 #[derive(Deserialize)]
 struct CargoPackage {
-    version: String,
+    // `version` may be an explicit string (`version = "1.2.3"`) or a workspace
+    // inheritance table (`version.workspace = true`). Capture it loosely and
+    // extract the string form only when present.
+    version: Option<toml::Value>,
 }
 
 pub fn parse_cargo_toml_version(content: &str) -> Result<Version> {
     let parsed: CargoToml = toml::from_str(content)
         .map_err(|e| Error::Version(format!("failed to parse Cargo.toml: {e}")))?;
-    Version::parse(&parsed.package.version)
-        .map_err(|e| Error::Version(format!("invalid version '{}': {e}", parsed.package.version)))
+
+    // Prefer an explicit `[package].version` string; fall back to
+    // `[workspace.package].version`. This supports both single-crate manifests
+    // and pure-workspace roots (no `[package]` table), as well as member crates
+    // that inherit the version via `version.workspace = true`.
+    let version_str = parsed
+        .package
+        .as_ref()
+        .and_then(|p| p.version.as_ref())
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            parsed
+                .workspace
+                .as_ref()
+                .and_then(|w| w.package.as_ref())
+                .and_then(|p| p.version.as_ref())
+                .and_then(|v| v.as_str())
+        })
+        .ok_or_else(|| {
+            Error::Version(
+                "no [package].version or [workspace.package].version in Cargo.toml".to_string(),
+            )
+        })?;
+
+    Version::parse(version_str)
+        .map_err(|e| Error::Version(format!("invalid version '{version_str}': {e}")))
 }
 
 pub fn replace_cargo_toml_version(content: &str, new_version: &Version) -> String {
