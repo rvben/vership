@@ -19,6 +19,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.3](https://github.com/rvben/vership/compare/v0.5.2...v0.5.3) - 2026-06-09
+
+### Fixed
+
+- **version**: support pure-workspace Cargo.toml roots ([41b21c5](https://github.com/rvben/vership/commit/41b21c57319aab7235d91398e4f393c97aef788f))
+
 ## [0.5.2](https://github.com/rvben/vership/compare/v0.5.1...v0.5.2) - 2026-05-23
 
 ### Added
