@@ -601,3 +601,45 @@ fn status_limit_sets_truncated_when_exceeded() {
     let commits = doc["commits"].as_array().expect("commits array");
     assert_eq!(commits.len(), 1, "only 1 commit returned when limit=1");
 }
+
+#[test]
+fn help_and_version_write_no_error_envelope() {
+    for flag in ["--help", "--version"] {
+        let output = AssertCommand::cargo_bin("vership")
+            .unwrap()
+            .arg(flag)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        assert!(
+            output.stderr.is_empty(),
+            "{flag} must write nothing to stderr, got: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn status_fields_selects_computed_commits() {
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["status", "--fields", "commits", "-o", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let keys: Vec<&String> = doc.as_object().expect("object").keys().collect();
+    assert_eq!(
+        keys,
+        vec!["commits"],
+        "--fields commits must select exactly the computed commits field"
+    );
+    assert!(doc["commits"].is_array(), "commits must be an array");
+}

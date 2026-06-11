@@ -52,35 +52,36 @@ pub fn status(
             "unreleased_commits": all_commits.len(),
         });
 
-        // Apply --fields filter when requested.
+        // Build the complete document first, then apply --fields. Filtering
+        // before the computed fields exist would make schema-declared fields
+        // like `commits` unselectable.
+        let commits_json: Vec<serde_json::Value> = shown_commits
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "hash": &c.hash[..7.min(c.hash.len())],
+                    "message": c.message,
+                })
+            })
+            .collect();
+        let total = all_commits.len();
+        let truncated = (limit > 0 && after_offset.len() > limit) || offset > 0;
+        data["commits"] = serde_json::json!(commits_json);
+        if truncated {
+            data["truncated"] = serde_json::json!(true);
+            data["total_commits"] = serde_json::json!(total);
+        }
+        if limit > 0 {
+            data["limit"] = serde_json::json!(limit);
+        }
+        if offset > 0 {
+            data["offset"] = serde_json::json!(offset);
+        }
+
         if let Some(f) = fields {
             let keep: std::collections::HashSet<&str> = f.split(',').collect();
             if let Some(obj) = data.as_object_mut() {
                 obj.retain(|k, _| keep.contains(k.as_str()));
-            }
-        } else {
-            // Include commit list with pagination metadata.
-            let commits_json: Vec<serde_json::Value> = shown_commits
-                .iter()
-                .map(|c| {
-                    serde_json::json!({
-                        "hash": &c.hash[..7.min(c.hash.len())],
-                        "message": c.message,
-                    })
-                })
-                .collect();
-            let total = all_commits.len();
-            let truncated = (limit > 0 && after_offset.len() > limit) || offset > 0;
-            data["commits"] = serde_json::json!(commits_json);
-            if truncated {
-                data["truncated"] = serde_json::json!(true);
-                data["total_commits"] = serde_json::json!(total);
-            }
-            if limit > 0 {
-                data["limit"] = serde_json::json!(limit);
-            }
-            if offset > 0 {
-                data["offset"] = serde_json::json!(offset);
             }
         }
 

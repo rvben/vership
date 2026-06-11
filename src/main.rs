@@ -10,6 +10,16 @@ fn main() {
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(clap_err) => {
+            // Help and version are successful display paths, not parse
+            // failures: print them as clap intends and exit without an
+            // error envelope.
+            if matches!(
+                clap_err.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) {
+                let _ = clap_err.print();
+                process::exit(clap_err.exit_code());
+            }
             // Print clap's human-readable message first, then the structured
             // envelope as the last line of stderr (spec requirement: the
             // envelope must be mechanically extractable from the last line).
