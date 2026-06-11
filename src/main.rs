@@ -7,11 +7,35 @@ use vership::error::Error;
 use vership::output::OutputConfig;
 
 fn main() {
-    let cli = Cli::parse();
-    let output = OutputConfig::new(cli.json);
+    let cli = match Cli::try_parse() {
+        Ok(c) => c,
+        Err(clap_err) => {
+            // Print clap's human-readable message first, then the structured
+            // envelope as the last line of stderr (spec requirement: the
+            // envelope must be mechanically extractable from the last line).
+            let message = clap_err
+                .to_string()
+                .lines()
+                .next()
+                .unwrap_or("parse error")
+                .trim()
+                .to_string();
+            // Write clap's full output to stderr, suppressing its own exit.
+            let _ = clap_err.print();
+            let envelope = serde_json::json!({
+                "error": {
+                    "kind": "error",
+                    "message": message,
+                }
+            });
+            eprintln!("{}", serde_json::to_string(&envelope).unwrap_or_default());
+            process::exit(clap_err.exit_code());
+        }
+    };
+    let output = OutputConfig::new(cli.output, cli.json);
 
     if let Err(e) = run(cli, output) {
-        eprintln!("Error: {e}");
+        e.emit_structured();
         process::exit(e.exit_code());
     }
 }
@@ -36,8 +60,12 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             Ok(())
         }
         Command::Config(ConfigCommand::Init) => vership::config::init(),
-        Command::Config(ConfigCommand::Show) => vership::config::show(output.json),
-        Command::Status => vership::release::status(&output),
+        Command::Config(ConfigCommand::Show) => vership::config::show(&output),
+        Command::Status {
+            limit,
+            offset,
+            fields,
+        } => vership::release::status(&output, limit, offset, fields.as_deref()),
         Command::Preflight => vership::release::preflight(),
         Command::Changelog => vership::release::changelog_preview(),
         Command::Bump {
@@ -45,24 +73,27 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             dry_run,
             skip_checks,
             no_push,
-        } => vership::release::bump(level, dry_run, skip_checks, no_push),
+            yes,
+        } => vership::release::bump(level, dry_run, skip_checks, no_push, yes),
         Command::Release {
             dry_run,
             skip_checks,
             no_push,
-        } => vership::release::release_current(dry_run, skip_checks, no_push),
+            yes,
+        } => vership::release::release_current(dry_run, skip_checks, no_push, yes),
         Command::Resume {
             dry_run,
             skip_checks,
             no_push,
-        } => vership::release::resume(dry_run, skip_checks, no_push),
+            yes,
+        } => vership::release::resume(dry_run, skip_checks, no_push, yes),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use clap::Parser;
-    use vership::cli::{BumpLevel, Cli, Command, ConfigCommand};
+    use vership::cli::{BumpLevel, Cli, Command, ConfigCommand, OutputFormat};
 
     #[test]
     fn cli_bump_patch() {
@@ -73,11 +104,13 @@ mod tests {
                 dry_run,
                 skip_checks,
                 no_push,
+                yes,
             } => {
                 assert!(matches!(level, BumpLevel::Patch));
                 assert!(!dry_run);
                 assert!(!skip_checks);
                 assert!(!no_push);
+                assert!(!yes);
             }
             _ => panic!("expected Bump"),
         }
@@ -105,6 +138,15 @@ mod tests {
     }
 
     #[test]
+    fn cli_bump_yes() {
+        let cli = Cli::try_parse_from(["vership", "bump", "patch", "--yes"]).unwrap();
+        match cli.command {
+            Command::Bump { yes, .. } => assert!(yes),
+            _ => panic!("expected Bump"),
+        }
+    }
+
+    #[test]
     fn cli_release() {
         let cli = Cli::try_parse_from(["vership", "release"]).unwrap();
         match cli.command {
@@ -112,11 +154,22 @@ mod tests {
                 dry_run,
                 skip_checks,
                 no_push,
+                yes,
             } => {
                 assert!(!dry_run);
                 assert!(!skip_checks);
                 assert!(!no_push);
+                assert!(!yes);
             }
+            _ => panic!("expected Release"),
+        }
+    }
+
+    #[test]
+    fn cli_release_yes() {
+        let cli = Cli::try_parse_from(["vership", "release", "--yes"]).unwrap();
+        match cli.command {
+            Command::Release { yes, .. } => assert!(yes),
             _ => panic!("expected Release"),
         }
     }
@@ -157,7 +210,16 @@ mod tests {
     #[test]
     fn cli_status() {
         let cli = Cli::try_parse_from(["vership", "status"]).unwrap();
-        assert!(matches!(cli.command, Command::Status));
+        assert!(matches!(cli.command, Command::Status { .. }));
+    }
+
+    #[test]
+    fn cli_status_limit() {
+        let cli = Cli::try_parse_from(["vership", "status", "--limit", "5"]).unwrap();
+        match cli.command {
+            Command::Status { limit, .. } => assert_eq!(limit, 5),
+            _ => panic!("expected Status"),
+        }
     }
 
     #[test]
@@ -191,9 +253,28 @@ mod tests {
     }
 
     #[test]
-    fn cli_json_flag() {
+    fn cli_json_flag_alias() {
+        // --json is a hidden alias for --output json; backward compatibility.
         let cli = Cli::try_parse_from(["vership", "--json", "status"]).unwrap();
         assert!(cli.json);
+    }
+
+    #[test]
+    fn cli_output_json() {
+        let cli = Cli::try_parse_from(["vership", "--output", "json", "status"]).unwrap();
+        assert!(matches!(cli.output, OutputFormat::Json));
+    }
+
+    #[test]
+    fn cli_output_text() {
+        let cli = Cli::try_parse_from(["vership", "-o", "text", "status"]).unwrap();
+        assert!(matches!(cli.output, OutputFormat::Text));
+    }
+
+    #[test]
+    fn cli_output_default_is_auto() {
+        let cli = Cli::try_parse_from(["vership", "status"]).unwrap();
+        assert!(matches!(cli.output, OutputFormat::Auto));
     }
 
     #[test]

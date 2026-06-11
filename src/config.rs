@@ -122,10 +122,10 @@ impl Config {
     }
 }
 
-pub fn show(json: bool) -> Result<()> {
+pub fn show(output: &crate::output::OutputConfig) -> Result<()> {
     let path = Path::new("vership.toml");
     let config = Config::load(path);
-    if json {
+    if output.is_json() {
         println!(
             "{}",
             serde_json::to_string_pretty(&config).map_err(|e| Error::Config(e.to_string()))?

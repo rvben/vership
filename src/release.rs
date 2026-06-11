@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use crate::artifacts;
@@ -19,40 +20,109 @@ fn project_root() -> Result<PathBuf> {
         .map_err(|e| Error::Other(format!("failed to get current directory: {e}")))
 }
 
-pub fn status(output: &OutputConfig) -> Result<()> {
+/// Enforce that a mutating command received explicit confirmation.
+/// Without a TTY and without `--yes`, refuse with a structured error rather
+/// than proceeding silently - agents must always hit a wall, not a trigger.
+fn require_yes(yes: bool, command: &str) -> Result<()> {
+    if !yes && !std::io::stdin().is_terminal() {
+        return Err(Error::ConfirmationRequired {
+            message: format!(
+                "`vership {command}` modifies repository state and requires confirmation"
+            ),
+            hint: format!("Re-run with --yes to confirm: vership {command} --yes"),
+        });
+    }
+    Ok(())
+}
+
+pub fn status(
+    output: &OutputConfig,
+    limit: usize,
+    offset: usize,
+    fields: Option<&str>,
+) -> Result<()> {
     let root = project_root()?;
     let config = Config::load(&root.join("vership.toml"));
     let project = project::detect(&root, config.project.project_type.as_deref())?;
     let current_version = project.read_version(&root)?;
     let latest_tag = git::latest_semver_tag(&root)?;
-    let commits = git::commits_since_tag(&root, latest_tag.as_deref())?;
+    let all_commits = git::commits_since_tag(&root, latest_tag.as_deref())?;
 
-    if output.json {
-        let data = serde_json::json!({
+    // Apply offset then limit to the commit list.
+    let after_offset = if offset < all_commits.len() {
+        &all_commits[offset..]
+    } else {
+        &[]
+    };
+    let shown_commits = if limit > 0 {
+        &after_offset[..limit.min(after_offset.len())]
+    } else {
+        after_offset
+    };
+
+    if output.is_json() {
+        let mut data = serde_json::json!({
             "project_type": project.name(),
             "current_version": current_version.to_string(),
             "latest_tag": latest_tag,
-            "unreleased_commits": commits.len(),
+            "unreleased_commits": all_commits.len(),
         });
+
+        // Apply --fields filter when requested.
+        if let Some(f) = fields {
+            let keep: std::collections::HashSet<&str> = f.split(',').collect();
+            if let Some(obj) = data.as_object_mut() {
+                obj.retain(|k, _| keep.contains(k.as_str()));
+            }
+        } else {
+            // Include commit list with pagination metadata.
+            let commits_json: Vec<serde_json::Value> = shown_commits
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "hash": &c.hash[..7.min(c.hash.len())],
+                        "message": c.message,
+                    })
+                })
+                .collect();
+            let total = all_commits.len();
+            let truncated = (limit > 0 && after_offset.len() > limit) || offset > 0;
+            data["commits"] = serde_json::json!(commits_json);
+            if truncated {
+                data["truncated"] = serde_json::json!(true);
+                data["total_commits"] = serde_json::json!(total);
+            }
+            if limit > 0 {
+                data["limit"] = serde_json::json!(limit);
+            }
+            if offset > 0 {
+                data["offset"] = serde_json::json!(offset);
+            }
+        }
+
         println!(
             "{}",
             serde_json::to_string_pretty(&data).expect("serialize")
         );
     } else {
-        eprintln!("Project type: {}", project.name());
-        eprintln!("Current version: {current_version}");
+        // Text mode: data goes to stdout per the spec (Principle 3).
+        println!("Project type: {}", project.name());
+        println!("Current version: {current_version}");
         if let Some(tag) = &latest_tag {
-            eprintln!("Latest tag: {tag}");
+            println!("Latest tag: {tag}");
         } else {
-            eprintln!("Latest tag: (none)");
+            println!("Latest tag: (none)");
         }
-        eprintln!("Unreleased commits: {}", commits.len());
+        println!("Unreleased commits: {}", all_commits.len());
 
-        if !commits.is_empty() {
-            eprintln!();
-            for c in &commits {
+        if !shown_commits.is_empty() {
+            println!();
+            for c in shown_commits {
                 let short_hash = &c.hash[..7.min(c.hash.len())];
-                eprintln!("  {short_hash} {}", c.message);
+                println!("  {short_hash} {}", c.message);
+            }
+            if limit > 0 && after_offset.len() > limit {
+                println!("  ... ({} more)", after_offset.len() - limit);
             }
         }
     }
@@ -108,6 +178,7 @@ pub struct ExecOpts {
     pub dry_run: bool,
     pub skip_checks: bool,
     pub no_push: bool,
+    pub yes: bool,
 }
 
 /// Bump the version per `level` and release.
@@ -115,7 +186,16 @@ pub struct ExecOpts {
 /// Auto-detects an interrupted prior run: if the manifest is already at the
 /// expected post-bump version and the working tree is dirty, finishes that
 /// run instead of double-bumping.
-pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
+pub fn bump(
+    level: BumpLevel,
+    dry_run: bool,
+    skip_checks: bool,
+    no_push: bool,
+    yes: bool,
+) -> Result<()> {
+    if !dry_run {
+        require_yes(yes, "bump")?;
+    }
     let root = project_root()?;
     let config = Config::load(&root.join("vership.toml"));
     let project = project::detect(&root, config.project.project_type.as_deref())?;
@@ -131,6 +211,7 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
             dry_run,
             skip_checks,
             no_push,
+            yes,
         },
     )
 }
@@ -139,7 +220,10 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
 ///
 /// Used for initial releases (when the manifest is already at the intended
 /// starting version) or when the version was set manually.
-pub fn release_current(dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
+pub fn release_current(dry_run: bool, skip_checks: bool, no_push: bool, yes: bool) -> Result<()> {
+    if !dry_run {
+        require_yes(yes, "release")?;
+    }
     let root = project_root()?;
     let config = Config::load(&root.join("vership.toml"));
     let project = project::detect(&root, config.project.project_type.as_deref())?;
@@ -154,6 +238,7 @@ pub fn release_current(dry_run: bool, skip_checks: bool, no_push: bool) -> Resul
             dry_run,
             skip_checks,
             no_push,
+            yes,
         },
     )
 }
@@ -162,7 +247,10 @@ pub fn release_current(dry_run: bool, skip_checks: bool, no_push: bool) -> Resul
 ///
 /// Trusts the on-disk version as the intended target, then completes the
 /// commit/tag/push flow.
-pub fn resume(dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
+pub fn resume(dry_run: bool, skip_checks: bool, no_push: bool, yes: bool) -> Result<()> {
+    if !dry_run {
+        require_yes(yes, "resume")?;
+    }
     let root = project_root()?;
     let config = Config::load(&root.join("vership.toml"));
     let project = project::detect(&root, config.project.project_type.as_deref())?;
@@ -177,6 +265,7 @@ pub fn resume(dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
             dry_run,
             skip_checks,
             no_push,
+            yes,
         },
     )
 }
