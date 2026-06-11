@@ -21,6 +21,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.5](https://github.com/rvben/vership/compare/v0.5.4...v0.5.5) - 2026-06-11
+
+### Fixed
+
+- clean help/version stderr and apply --fields after computed status fields ([c299300](https://github.com/rvben/vership/commit/c299300c18efdafc98c7729ce52b4988852f918d))
+
 ## [0.5.4](https://github.com/rvben/vership/compare/v0.5.3...v0.5.4) - 2026-06-11
 
 ### Added
