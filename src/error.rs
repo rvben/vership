@@ -6,8 +6,6 @@ pub mod exit_codes {
     pub const CHECK_FAILED: i32 = 4;
     pub const HOOK_FAILED: i32 = 5;
     pub const VERSION_ERROR: i32 = 6;
-    pub const CONFLICT: i32 = 7;
-    pub const CONFIRMATION_REQUIRED: i32 = 8;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -30,14 +28,6 @@ pub enum Error {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// A mutating command was invoked without a TTY and without --yes.
-    #[error("{message}")]
-    ConfirmationRequired { message: String, hint: String },
-
-    /// Incompatible repeat: the requested state conflicts with existing state.
-    #[error("Conflict: {0}")]
-    Conflict(String),
-
     #[error("{0}")]
     Other(String),
 }
@@ -50,8 +40,6 @@ impl Error {
             Error::CheckFailed(_) => exit_codes::CHECK_FAILED,
             Error::HookFailed(_) => exit_codes::HOOK_FAILED,
             Error::Version(_) => exit_codes::VERSION_ERROR,
-            Error::Conflict(_) => exit_codes::CONFLICT,
-            Error::ConfirmationRequired { .. } => exit_codes::CONFIRMATION_REQUIRED,
             Error::Io(_) | Error::Other(_) => exit_codes::GENERAL_ERROR,
         }
     }
@@ -64,38 +52,20 @@ impl Error {
             Error::CheckFailed(_) => "check_failed",
             Error::HookFailed(_) => "hook_failed",
             Error::Version(_) => "version",
-            Error::Conflict(_) => "conflict",
-            Error::ConfirmationRequired { .. } => "confirmation_required",
             Error::Io(_) | Error::Other(_) => "error",
         }
     }
 
     /// Write the structured error envelope as the last line of stderr.
     ///
-    /// Format: `{"error":{"kind":"...","message":"...","hint":"..."}}` (hint omitted when absent).
+    /// Format: `{"error":{"kind":"...","message":"..."}}`.
     pub fn emit_structured(&self) {
-        let kind = self.kind();
-        let message = self.to_string();
-        let hint = match self {
-            Error::ConfirmationRequired { hint, .. } => Some(hint.as_str()),
-            _ => None,
-        };
-        let envelope = if let Some(h) = hint {
-            serde_json::json!({
-                "error": {
-                    "kind": kind,
-                    "message": message,
-                    "hint": h,
-                }
-            })
-        } else {
-            serde_json::json!({
-                "error": {
-                    "kind": kind,
-                    "message": message,
-                }
-            })
-        };
+        let envelope = serde_json::json!({
+            "error": {
+                "kind": self.kind(),
+                "message": self.to_string(),
+            }
+        });
         eprintln!("{}", serde_json::to_string(&envelope).unwrap_or_default());
     }
 }

@@ -51,9 +51,6 @@ pub enum Command {
         /// Stop after tagging, do not push
         #[arg(long)]
         no_push: bool,
-        /// Skip confirmation prompt (required when stdin is not a TTY)
-        #[arg(long)]
-        yes: bool,
     },
     /// Tag and release the on-disk version as-is, without bumping.
     /// Use for initial releases or when the version was set manually.
@@ -67,9 +64,6 @@ pub enum Command {
         /// Stop after tagging, do not push
         #[arg(long)]
         no_push: bool,
-        /// Skip confirmation prompt (required when stdin is not a TTY)
-        #[arg(long)]
-        yes: bool,
     },
     /// Resume an interrupted bump. Trusts the on-disk version as the target
     /// and finishes the commit/tag/push flow.
@@ -83,9 +77,6 @@ pub enum Command {
         /// Stop after tagging, do not push
         #[arg(long)]
         no_push: bool,
-        /// Skip confirmation prompt (required when stdin is not a TTY)
-        #[arg(long)]
-        yes: bool,
     },
     /// Preview changelog for unreleased commits
     Changelog,

@@ -1,4 +1,3 @@
-use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use crate::artifacts;
@@ -18,21 +17,6 @@ use crate::version_files;
 fn project_root() -> Result<PathBuf> {
     std::env::current_dir()
         .map_err(|e| Error::Other(format!("failed to get current directory: {e}")))
-}
-
-/// Enforce that a mutating command received explicit confirmation.
-/// Without a TTY and without `--yes`, refuse with a structured error rather
-/// than proceeding silently - agents must always hit a wall, not a trigger.
-fn require_yes(yes: bool, command: &str) -> Result<()> {
-    if !yes && !std::io::stdin().is_terminal() {
-        return Err(Error::ConfirmationRequired {
-            message: format!(
-                "`vership {command}` modifies repository state and requires confirmation"
-            ),
-            hint: format!("Re-run with --yes to confirm: vership {command} --yes"),
-        });
-    }
-    Ok(())
 }
 
 pub fn status(
@@ -178,7 +162,6 @@ pub struct ExecOpts {
     pub dry_run: bool,
     pub skip_checks: bool,
     pub no_push: bool,
-    pub yes: bool,
 }
 
 /// Bump the version per `level` and release.
@@ -186,16 +169,7 @@ pub struct ExecOpts {
 /// Auto-detects an interrupted prior run: if the manifest is already at the
 /// expected post-bump version and the working tree is dirty, finishes that
 /// run instead of double-bumping.
-pub fn bump(
-    level: BumpLevel,
-    dry_run: bool,
-    skip_checks: bool,
-    no_push: bool,
-    yes: bool,
-) -> Result<()> {
-    if !dry_run {
-        require_yes(yes, "bump")?;
-    }
+pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
     let root = project_root()?;
     let config = Config::load(&root.join("vership.toml"));
     let project = project::detect(&root, config.project.project_type.as_deref())?;
@@ -211,7 +185,6 @@ pub fn bump(
             dry_run,
             skip_checks,
             no_push,
-            yes,
         },
     )
 }
@@ -220,10 +193,7 @@ pub fn bump(
 ///
 /// Used for initial releases (when the manifest is already at the intended
 /// starting version) or when the version was set manually.
-pub fn release_current(dry_run: bool, skip_checks: bool, no_push: bool, yes: bool) -> Result<()> {
-    if !dry_run {
-        require_yes(yes, "release")?;
-    }
+pub fn release_current(dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
     let root = project_root()?;
     let config = Config::load(&root.join("vership.toml"));
     let project = project::detect(&root, config.project.project_type.as_deref())?;
@@ -238,7 +208,6 @@ pub fn release_current(dry_run: bool, skip_checks: bool, no_push: bool, yes: boo
             dry_run,
             skip_checks,
             no_push,
-            yes,
         },
     )
 }
@@ -247,10 +216,7 @@ pub fn release_current(dry_run: bool, skip_checks: bool, no_push: bool, yes: boo
 ///
 /// Trusts the on-disk version as the intended target, then completes the
 /// commit/tag/push flow.
-pub fn resume(dry_run: bool, skip_checks: bool, no_push: bool, yes: bool) -> Result<()> {
-    if !dry_run {
-        require_yes(yes, "resume")?;
-    }
+pub fn resume(dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
     let root = project_root()?;
     let config = Config::load(&root.join("vership.toml"));
     let project = project::detect(&root, config.project.project_type.as_deref())?;
@@ -265,7 +231,6 @@ pub fn resume(dry_run: bool, skip_checks: bool, no_push: bool, yes: bool) -> Res
             dry_run,
             skip_checks,
             no_push,
-            yes,
         },
     )
 }

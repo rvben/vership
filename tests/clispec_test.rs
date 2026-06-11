@@ -140,33 +140,6 @@ fn schema_status_has_output_fields() {
     );
 }
 
-/// The errors array must list `confirmation_required` with exit_code and retryable.
-#[test]
-fn schema_errors_include_confirmation_required() {
-    let output = AssertCommand::cargo_bin("vership")
-        .unwrap()
-        .args(["schema"])
-        .assert()
-        .success()
-        .get_output()
-        .clone();
-
-    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let errors = doc["errors"].as_array().expect("errors is array");
-    let cr = errors
-        .iter()
-        .find(|e| e["kind"] == "confirmation_required")
-        .expect("confirmation_required must be in errors");
-    assert!(
-        cr["exit_code"].as_u64().is_some(),
-        "confirmation_required must have exit_code"
-    );
-    assert!(
-        cr["retryable"].as_bool().is_some(),
-        "confirmation_required must have retryable"
-    );
-}
-
 /// The schema must declare global_args including --output.
 #[test]
 fn schema_has_global_args_with_output() {
@@ -334,45 +307,14 @@ fn error_envelope_is_last_line_of_stderr() {
     );
 }
 
-// ---- confirmation_required without TTY ----
+// ---- dry-run behavior ----
 
-/// `bump` without --yes and without a TTY must exit non-zero with
-/// confirmation_required and must NOT proceed (version file unchanged).
-#[test]
-fn bump_without_yes_and_no_tty_refuses() {
-    let dir = TempDir::new().unwrap();
-    init_repo(dir.path());
-
-    let output = AssertCommand::cargo_bin("vership")
-        .unwrap()
-        .current_dir(dir.path())
-        .args(["bump", "patch", "--skip-checks"])
-        .assert()
-        .failure()
-        .get_output()
-        .clone();
-
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    assert!(
-        stderr.contains("confirmation_required"),
-        "stderr must mention confirmation_required, got:\n{stderr}"
-    );
-
-    // Version file must not have changed.
-    let cargo_toml = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
-    assert!(
-        cargo_toml.contains("0.1.0"),
-        "version must not have changed without --yes"
-    );
-}
-
-/// `bump --dry-run` must succeed without --yes even without a TTY
-/// (dry-run does not modify state).
+/// `bump --dry-run` must succeed without a TTY (dry-run does not modify state).
 ///
 /// Uses a Gradle project to avoid needing a valid Cargo.lock (Gradle lockfile
 /// check is a no-op when gradle.properties exists).
 #[test]
-fn bump_dry_run_does_not_require_yes() {
+fn bump_dry_run_does_not_modify_state() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
 
@@ -434,28 +376,6 @@ fn bump_dry_run_does_not_require_yes() {
         .args(["bump", "patch", "--dry-run", "--skip-checks"])
         .assert()
         .success();
-}
-
-/// `release` without --yes and without a TTY must refuse.
-#[test]
-fn release_without_yes_and_no_tty_refuses() {
-    let dir = TempDir::new().unwrap();
-    init_repo(dir.path());
-
-    let output = AssertCommand::cargo_bin("vership")
-        .unwrap()
-        .current_dir(dir.path())
-        .args(["release", "--skip-checks"])
-        .assert()
-        .failure()
-        .get_output()
-        .clone();
-
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    assert!(
-        stderr.contains("confirmation_required"),
-        "release must refuse without --yes when not a TTY, got:\n{stderr}"
-    );
 }
 
 // ---- status --limit and --fields ----

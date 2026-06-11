@@ -89,7 +89,7 @@ fn bump_promotes_curated_unreleased_section() {
     let output = AssertCommand::cargo_bin("vership")
         .unwrap()
         .current_dir(root)
-        .args(["bump", "patch", "--skip-checks", "--no-push", "--yes"])
+        .args(["bump", "patch", "--skip-checks", "--no-push"])
         .assert()
         .success()
         .get_output()
@@ -193,7 +193,7 @@ fn bump_strips_stale_changelog_link_refs() {
     AssertCommand::cargo_bin("vership")
         .unwrap()
         .current_dir(root)
-        .args(["bump", "patch", "--skip-checks", "--no-push", "--yes"])
+        .args(["bump", "patch", "--skip-checks", "--no-push"])
         .assert()
         .success();
 

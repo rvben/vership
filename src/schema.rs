@@ -62,12 +62,6 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                         "type": "boolean",
                         "default": false,
                         "description": "Stop after tagging, do not push"
-                    },
-                    {
-                        "name": "--yes",
-                        "type": "boolean",
-                        "default": false,
-                        "description": "Skip confirmation prompt (required when stdin is not a TTY)"
                     }
                 ],
                 "output_fields": [
@@ -100,12 +94,6 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                         "type": "boolean",
                         "default": false,
                         "description": "Stop after tagging, do not push"
-                    },
-                    {
-                        "name": "--yes",
-                        "type": "boolean",
-                        "default": false,
-                        "description": "Skip confirmation prompt (required when stdin is not a TTY)"
                     }
                 ],
                 "output_fields": [
@@ -138,12 +126,6 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                         "type": "boolean",
                         "default": false,
                         "description": "Stop after tagging, do not push"
-                    },
-                    {
-                        "name": "--yes",
-                        "type": "boolean",
-                        "default": false,
-                        "description": "Skip confirmation prompt (required when stdin is not a TTY)"
                     }
                 ],
                 "output_fields": [
@@ -292,18 +274,6 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                 "exit_code": 6,
                 "retryable": false,
                 "description": "Version is invalid, missing, or would not produce a valid bump."
-            },
-            {
-                "kind": "conflict",
-                "exit_code": 7,
-                "retryable": false,
-                "description": "Incompatible state: the requested operation conflicts with the current repository state."
-            },
-            {
-                "kind": "confirmation_required",
-                "exit_code": 8,
-                "retryable": false,
-                "description": "A mutating command was invoked without a TTY and without --yes. Re-run with --yes."
             },
             {
                 "kind": "error",

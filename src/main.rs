@@ -73,20 +73,17 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             dry_run,
             skip_checks,
             no_push,
-            yes,
-        } => vership::release::bump(level, dry_run, skip_checks, no_push, yes),
+        } => vership::release::bump(level, dry_run, skip_checks, no_push),
         Command::Release {
             dry_run,
             skip_checks,
             no_push,
-            yes,
-        } => vership::release::release_current(dry_run, skip_checks, no_push, yes),
+        } => vership::release::release_current(dry_run, skip_checks, no_push),
         Command::Resume {
             dry_run,
             skip_checks,
             no_push,
-            yes,
-        } => vership::release::resume(dry_run, skip_checks, no_push, yes),
+        } => vership::release::resume(dry_run, skip_checks, no_push),
     }
 }
 
@@ -104,13 +101,11 @@ mod tests {
                 dry_run,
                 skip_checks,
                 no_push,
-                yes,
             } => {
                 assert!(matches!(level, BumpLevel::Patch));
                 assert!(!dry_run);
                 assert!(!skip_checks);
                 assert!(!no_push);
-                assert!(!yes);
             }
             _ => panic!("expected Bump"),
         }
@@ -138,15 +133,6 @@ mod tests {
     }
 
     #[test]
-    fn cli_bump_yes() {
-        let cli = Cli::try_parse_from(["vership", "bump", "patch", "--yes"]).unwrap();
-        match cli.command {
-            Command::Bump { yes, .. } => assert!(yes),
-            _ => panic!("expected Bump"),
-        }
-    }
-
-    #[test]
     fn cli_release() {
         let cli = Cli::try_parse_from(["vership", "release"]).unwrap();
         match cli.command {
@@ -154,22 +140,11 @@ mod tests {
                 dry_run,
                 skip_checks,
                 no_push,
-                yes,
             } => {
                 assert!(!dry_run);
                 assert!(!skip_checks);
                 assert!(!no_push);
-                assert!(!yes);
             }
-            _ => panic!("expected Release"),
-        }
-    }
-
-    #[test]
-    fn cli_release_yes() {
-        let cli = Cli::try_parse_from(["vership", "release", "--yes"]).unwrap();
-        match cli.command {
-            Command::Release { yes, .. } => assert!(yes),
             _ => panic!("expected Release"),
         }
     }
