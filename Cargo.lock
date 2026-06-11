@@ -1603,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "vership"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "assert_cmd",
  "chrono",

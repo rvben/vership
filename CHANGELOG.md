@@ -20,6 +20,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.4](https://github.com/rvben/vership/compare/v0.5.3...v0.5.4) - 2026-06-11
+
+### Added
+
+- **errors**: add Conflict error kind for tag-already-exists pre-flight ([e849dd1](https://github.com/rvben/vership/commit/e849dd12c3b5b66297f28b1a0ded52929b2c0326))
+- clispec v0.2 compliance (score 28% -> 100%) ([fdad407](https://github.com/rvben/vership/commit/fdad4078aa318ec7c595a5414970a390b2ebcd05))
+
+### Fixed
+
+- revert require_yes gate and remove dead error kinds ([645676f](https://github.com/rvben/vership/commit/645676f9d0a937d540246fe97915b276a962f90a))
+
 ## [0.5.3](https://github.com/rvben/vership/compare/v0.5.2...v0.5.3) - 2026-06-09
 
 ### Fixed
