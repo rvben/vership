@@ -6,6 +6,7 @@ pub mod exit_codes {
     pub const CHECK_FAILED: i32 = 4;
     pub const HOOK_FAILED: i32 = 5;
     pub const VERSION_ERROR: i32 = 6;
+    pub const CONFLICT: i32 = 7;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -25,6 +26,11 @@ pub enum Error {
     #[error("Version error: {0}")]
     Version(String),
 
+    /// The requested operation cannot converge: the target state already exists
+    /// or conflicts with immutable repository state. Re-running will not help.
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -40,6 +46,7 @@ impl Error {
             Error::CheckFailed(_) => exit_codes::CHECK_FAILED,
             Error::HookFailed(_) => exit_codes::HOOK_FAILED,
             Error::Version(_) => exit_codes::VERSION_ERROR,
+            Error::Conflict(_) => exit_codes::CONFLICT,
             Error::Io(_) | Error::Other(_) => exit_codes::GENERAL_ERROR,
         }
     }
@@ -52,6 +59,7 @@ impl Error {
             Error::CheckFailed(_) => "check_failed",
             Error::HookFailed(_) => "hook_failed",
             Error::Version(_) => "version",
+            Error::Conflict(_) => "conflict",
             Error::Io(_) | Error::Other(_) => "error",
         }
     }

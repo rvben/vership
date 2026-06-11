@@ -276,6 +276,12 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                 "description": "Version is invalid, missing, or would not produce a valid bump."
             },
             {
+                "kind": "conflict",
+                "exit_code": 7,
+                "retryable": false,
+                "description": "The target tag already exists or the requested state conflicts with immutable repository state. Re-running will not converge."
+            },
+            {
                 "kind": "error",
                 "exit_code": 1,
                 "retryable": false,

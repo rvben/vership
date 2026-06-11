@@ -63,10 +63,11 @@ pub fn run_preflight(
     }
     output::print_check_pass(&format!("On branch {branch}"));
 
-    // Tag does not already exist
+    // Tag does not already exist. A duplicate tag is an incompatible-repeat
+    // conflict: re-running cannot converge, so this gets its own error kind.
     if git::tag_exists(root, tag)? {
         output::print_check_fail(&format!("Tag {tag} already exists"));
-        return Err(Error::CheckFailed(format!("tag {tag} already exists")));
+        return Err(Error::Conflict(format!("tag {tag} already exists")));
     }
     output::print_check_pass(&format!("Tag {tag} does not exist"));
 

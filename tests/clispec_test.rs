@@ -307,6 +307,136 @@ fn error_envelope_is_last_line_of_stderr() {
     );
 }
 
+// ---- conflict error kind ----
+
+/// When the target tag already exists, vership bump must exit non-zero and emit
+/// a structured envelope with `kind: "conflict"` and an exit code that matches
+/// the schema declaration (7). Uses a Gradle project so the lockfile check is
+/// trivially satisfied (no Cargo.lock needed).
+///
+/// Setup: repo at v0.1.0, tag v0.1.1 pre-created. `vership bump patch` would
+/// target v0.1.1, hit the pre-flight tag-exists check, and must emit conflict.
+#[test]
+fn tag_already_exists_emits_conflict_kind() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    for args in [
+        vec!["init"],
+        vec!["checkout", "-b", "main"],
+        vec!["config", "user.email", "test@test.com"],
+        vec!["config", "user.name", "Test"],
+        vec!["config", "commit.gpgsign", "false"],
+        vec!["config", "tag.gpgsign", "false"],
+    ] {
+        Command::new("git")
+            .args(&args)
+            .current_dir(root)
+            .output()
+            .expect("git runs");
+    }
+
+    // Gradle project: settings.gradle.kts triggers detection, gradle.properties
+    // holds the version. No Cargo.lock required.
+    fs::write(
+        root.join("settings.gradle.kts"),
+        "rootProject.name = \"demo\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("gradle.properties"),
+        "pluginGroup=com.example\npluginVersion=0.1.0\n",
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["add", "settings.gradle.kts", "gradle.properties"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "chore: init"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    // Establish v0.1.0 as the latest released tag.
+    Command::new("git")
+        .args(["tag", "v0.1.0"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+
+    // A commit to give bump something to release.
+    fs::write(root.join("change.txt"), "x").unwrap();
+    Command::new("git")
+        .args(["add", "change.txt"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "fix: something"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+
+    // Pre-create v0.1.1 so the bump target collides.
+    Command::new("git")
+        .args(["tag", "v0.1.1"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    // Exit code must match the schema declaration for conflict (7).
+    let schema_output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .args(["schema"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let schema: serde_json::Value = serde_json::from_slice(&schema_output.stdout).unwrap();
+    let conflict_entry = schema["errors"]
+        .as_array()
+        .expect("errors array in schema")
+        .iter()
+        .find(|e| e["kind"] == "conflict")
+        .expect("conflict must be in schema errors");
+    let schema_exit_code = conflict_entry["exit_code"]
+        .as_i64()
+        .expect("conflict exit_code must be a number") as i32;
+
+    assert_eq!(
+        output.status.code(),
+        Some(schema_exit_code),
+        "exit code must match schema declaration for conflict"
+    );
+
+    // The last stderr line must be a JSON envelope with kind "conflict".
+    let last = last_stderr_line(&output.stderr);
+    let envelope: serde_json::Value =
+        serde_json::from_str(&last).expect("last stderr line must be valid JSON envelope");
+    assert_eq!(
+        envelope["error"]["kind"].as_str(),
+        Some("conflict"),
+        "error kind must be 'conflict', got: {envelope}"
+    );
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("v0.1.1"),
+        "error message must mention the conflicting tag, got: {envelope}"
+    );
+}
+
 // ---- dry-run behavior ----
 
 /// `bump --dry-run` must succeed without a TTY (dry-run does not modify state).
