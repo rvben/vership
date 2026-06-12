@@ -62,6 +62,15 @@ pub fn latest_semver_tag(root: &Path) -> Result<Option<String>> {
     Ok(output.lines().next().map(|s| s.to_string()))
 }
 
+/// Check whether the given tag exists on the origin remote.
+pub fn remote_tag_exists(root: &Path, tag: &str) -> Result<bool> {
+    let output = git_output(
+        root,
+        &["ls-remote", "--tags", "origin", &format!("refs/tags/{tag}")],
+    )?;
+    Ok(!output.is_empty())
+}
+
 /// Check whether the given tag exists in the repository.
 pub fn tag_exists(root: &Path, tag: &str) -> Result<bool> {
     git_success(

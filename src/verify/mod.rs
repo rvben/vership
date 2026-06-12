@@ -1,3 +1,4 @@
+pub mod checkers;
 pub mod targets;
 
 /// Result of checking one target for a specific version.

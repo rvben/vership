@@ -168,3 +168,37 @@ fn remote_url_from_git() {
     let url = vership::git::remote_url(dir.path()).unwrap().unwrap();
     assert_eq!(url, "https://github.com/rvben/vership");
 }
+
+#[test]
+fn remote_tag_exists_checks_origin() {
+    // Two repos: a bare "remote" with a pushed tag, and a local clone.
+    let remote_dir = TempDir::new().unwrap();
+    let local_dir = TempDir::new().unwrap();
+    Command::new("git")
+        .args(["init", "--bare"])
+        .current_dir(remote_dir.path())
+        .output()
+        .expect("git init --bare");
+    init_git_repo(local_dir.path());
+    create_commit(local_dir.path(), "init");
+    Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            remote_dir.path().to_str().unwrap(),
+        ])
+        .current_dir(local_dir.path())
+        .output()
+        .expect("git remote add");
+    create_tag(local_dir.path(), "v1.0.0");
+    let branch = vership::git::current_branch(local_dir.path()).unwrap();
+    Command::new("git")
+        .args(["push", "origin", &branch, "v1.0.0"])
+        .current_dir(local_dir.path())
+        .output()
+        .expect("git push");
+
+    assert!(vership::git::remote_tag_exists(local_dir.path(), "v1.0.0").unwrap());
+    assert!(!vership::git::remote_tag_exists(local_dir.path(), "v9.9.9").unwrap());
+}
