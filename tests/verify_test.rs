@@ -401,3 +401,23 @@ fn release_without_assets_is_error() {
         CheckResult::Error(_)
     ));
 }
+
+/// Hits real registries; run explicitly with:
+/// cargo nextest run --run-ignored only -E 'test(real_registries)'
+#[test]
+#[ignore = "network: hits real registries"]
+fn real_registries_find_published_vership() {
+    let agent = checkers::default_agent();
+    assert!(matches!(
+        checkers::crates(&agent, checkers::CRATES_IO, "vership", "0.5.5"),
+        CheckResult::Found(_)
+    ));
+    assert_eq!(
+        checkers::crates(&agent, checkers::CRATES_IO, "vership", "99.0.0"),
+        CheckResult::NotFound
+    );
+    assert!(matches!(
+        checkers::pypi(&agent, checkers::PYPI, "vership", "0.5.5"),
+        CheckResult::Found(_)
+    ));
+}

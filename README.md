@@ -100,6 +100,8 @@ vership resume                     Finish an interrupted bump (trusts on-disk ve
 vership changelog                  Preview changelog for unreleased commits
 vership preflight                  Run all pre-flight checks
 vership status                     Show version, project type, unreleased commits
+vership verify [<version>]         Verify a release is live on all publish targets
+  --targets <list> / --skip <list>         Filter targets
 vership config init                Create vership.toml with defaults
 vership schema                     JSON schema for agent integration
 vership completions <shell>        Generate shell completions
@@ -124,6 +126,35 @@ doesn't fire.
 8. **Commit**, **tag**, and **push**
 
 Your existing CI release workflow (GitHub Actions, etc.) triggers on the tag push as usual. vership handles the local side only.
+
+## Post-Release Verification
+
+A pushed tag does not mean the release published: a CI job can fail after tagging, skip a registry, or upload an empty release. `vership verify` checks that a version is actually live everywhere the repo publishes:
+
+```
+$ vership verify
+verify 0.5.6
+  ok   tag        v0.5.6
+  ok   release    0.5.6
+  ok   crates     0.5.6
+  FAIL pypi       not found
+```
+
+Targets are autodetected: `tag` and `release` from the GitHub remote, `crates` from Cargo.toml (unless `publish = false`), `pypi` from pyproject.toml, `npm` from a non-private package.json, `homebrew` and `ghcr` from publish steps in `.github/workflows/`. The `[verify]` section in vership.toml can skip targets or set the tap, formula, and image coordinates:
+
+```toml
+[verify]
+skip = ["npm"]
+tap = "owner/homebrew-tap"     # default: <owner>/homebrew-tap
+formula = "name"               # default: repo name
+image = "owner/name"           # default: owner/repo lowercased
+```
+
+Exit codes: 0 when every target passes; 8 (`unpublished`, retryable) when anything is missing, version-mismatched, or errored. Publishing may still be in flight, so 8 is a state, not a failure. To block until a release is fully live, compose with [tarry](https://github.com/rvben/tarry):
+
+```sh
+tarry cmd --timeout 20m -- vership verify
+```
 
 ## Changelog Format
 
