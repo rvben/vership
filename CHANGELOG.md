@@ -22,6 +22,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.6](https://github.com/rvben/vership/compare/v0.5.5...v0.5.6) - 2026-06-12
+
+### Added
+
+- verify command in clispec schema with unpublished outcome ([bf39ccb](https://github.com/rvben/vership/commit/bf39ccbd55271e52bd7d533c131c829fe2286752))
+- vership verify command ([4758d08](https://github.com/rvben/vership/commit/4758d088689864d07f0dd7a31c94174260e83690))
+- registry, homebrew, ghcr, release, and remote tag verify checkers ([d975ad4](https://github.com/rvben/vership/commit/d975ad41809a81ec3f45f14cca302f2292efd5b6))
+- verify target model and autodetection ([7880d37](https://github.com/rvben/vership/commit/7880d370ed71fd928503652c5728c0c678a89414))
+- verify config section and unpublished error kind ([ed3ed4a](https://github.com/rvben/vership/commit/ed3ed4abc441f220b6f71684629d4c03fa62f1dc))
+
+### Fixed
+
+- respect cargo registry restriction lists and exact-match homebrew versions ([a392c5f](https://github.com/rvben/vership/commit/a392c5f2f743a8ec451ffa1d4c23cc98002d135c))
+
 ## [0.5.5](https://github.com/rvben/vership/compare/v0.5.4...v0.5.5) - 2026-06-11
 
 ### Fixed
