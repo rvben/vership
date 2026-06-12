@@ -202,3 +202,30 @@ fn remote_tag_exists_checks_origin() {
     assert!(vership::git::remote_tag_exists(local_dir.path(), "v1.0.0").unwrap());
     assert!(!vership::git::remote_tag_exists(local_dir.path(), "v9.9.9").unwrap());
 }
+
+#[test]
+fn has_staged_changes_reflects_index_state() {
+    let dir = TempDir::new().unwrap();
+    init_git_repo(dir.path());
+    create_commit(dir.path(), "init");
+
+    // Clean tree: nothing staged.
+    assert!(!vership::git::has_staged_changes(dir.path()).unwrap());
+
+    // Staging an unchanged file stays a no-op.
+    Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(dir.path())
+        .output()
+        .expect("git add");
+    assert!(!vership::git::has_staged_changes(dir.path()).unwrap());
+
+    // A real staged change is detected.
+    std::fs::write(dir.path().join("staged.txt"), "new").unwrap();
+    Command::new("git")
+        .args(["add", "staged.txt"])
+        .current_dir(dir.path())
+        .output()
+        .expect("git add");
+    assert!(vership::git::has_staged_changes(dir.path()).unwrap());
+}

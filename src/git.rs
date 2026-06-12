@@ -144,6 +144,11 @@ pub fn remote_url(root: &Path) -> Result<Option<String>> {
     Ok(Some(url))
 }
 
+/// Return true if the index differs from HEAD, i.e. a commit would have content.
+pub fn has_staged_changes(root: &Path) -> Result<bool> {
+    Ok(!git_success(root, &["diff", "--cached", "--quiet"])?)
+}
+
 /// Stage the given files for commit.
 pub fn stage_files(root: &Path, files: &[&str]) -> Result<()> {
     let mut args = vec!["add"];

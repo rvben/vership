@@ -224,3 +224,158 @@ fn bump_strips_stale_changelog_link_refs() {
     assert!(written.ends_with("CONTRIBUTING.md\n"));
     assert!(!written.ends_with("\n\n"));
 }
+
+/// Bring a repo to the retag state: a completed bump (version + changelog
+/// committed, tag created), then the tag deleted because the release needed
+/// a fix before publishing. Returns the commit count at that state.
+fn setup_committed_release_without_tag(root: &Path) -> usize {
+    init_repo(root);
+    fs::write(
+        root.join("settings.gradle.kts"),
+        "rootProject.name = \"demo\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("gradle.properties"),
+        "pluginGroup=com.example\npluginVersion=0.1.5\n",
+    )
+    .unwrap();
+    git(root, &["add", "settings.gradle.kts", "gradle.properties"]);
+    git(root, &["commit", "-m", "chore: initial"]);
+    git(root, &["tag", "-a", "v0.1.5", "-m", "v0.1.5"]);
+
+    fs::write(root.join("source.txt"), "change").unwrap();
+    git(root, &["add", "source.txt"]);
+    git(root, &["commit", "-m", "fix: real bug fix since release"]);
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--no-push"])
+        .assert()
+        .success();
+
+    // The release was caught before publishing: delete the tag so it can be
+    // re-created on a corrected HEAD (the documented retag flow).
+    git(root, &["tag", "-d", "v0.1.6"]);
+
+    commit_count(root)
+}
+
+fn commit_count(root: &Path) -> usize {
+    let output = Command::new("git")
+        .args(["rev-list", "--count", "HEAD"])
+        .current_dir(root)
+        .output()
+        .expect("git runs");
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .expect("count parses")
+}
+
+fn tag_exists(root: &Path, tag: &str) -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--verify", &format!("refs/tags/{tag}")])
+        .current_dir(root)
+        .output()
+        .expect("git runs")
+        .status
+        .success()
+}
+
+/// Retag flow via `release`: everything is already committed and only the tag
+/// is missing. The run must converge (exit 0, tag created) without inventing
+/// a new commit or failing on the empty commit.
+#[test]
+fn release_retags_when_release_commit_already_exists() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let commits_before = setup_committed_release_without_tag(root);
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["release", "--skip-checks", "--no-push"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    assert!(tag_exists(root, "v0.1.6"), "tag must be re-created");
+    assert_eq!(
+        commit_count(root),
+        commits_before,
+        "no new commit when the release commit already exists"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("Nothing to commit"),
+        "skip must be reported, got stderr:\n{stderr}"
+    );
+}
+
+/// Same state via `resume`: an interrupted run whose commit landed but whose
+/// tag step never ran. Resume must finish the tag step.
+#[test]
+fn resume_finishes_tagging_when_commit_already_landed() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let commits_before = setup_committed_release_without_tag(root);
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["resume", "--skip-checks", "--no-push"])
+        .assert()
+        .success();
+
+    assert!(tag_exists(root, "v0.1.6"), "tag must be created");
+    assert_eq!(
+        commit_count(root),
+        commits_before,
+        "no new commit when resuming after the commit landed"
+    );
+}
+
+/// The fix-on-top retag flow: after deleting the tag, a correction commit is
+/// added. The release must tag the corrected HEAD without a fresh release
+/// commit (the changelog and version are already in history).
+#[test]
+fn release_retags_corrected_head_after_fix_commit() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_committed_release_without_tag(root);
+
+    fs::write(root.join("source.txt"), "corrected").unwrap();
+    git(root, &["add", "source.txt"]);
+    git(root, &["commit", "-m", "fix: correct the release"]);
+    let commits_before = commit_count(root);
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["release", "--skip-checks", "--no-push"])
+        .assert()
+        .success();
+
+    assert!(tag_exists(root, "v0.1.6"), "tag must be re-created");
+    assert_eq!(commit_count(root), commits_before, "no extra commit");
+
+    // The tag points at the corrected HEAD, not the original bump commit.
+    let tag_target = Command::new("git")
+        .args(["rev-parse", "v0.1.6^{commit}"])
+        .current_dir(root)
+        .output()
+        .expect("git runs");
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .expect("git runs");
+    assert_eq!(
+        String::from_utf8_lossy(&tag_target.stdout),
+        String::from_utf8_lossy(&head.stdout),
+        "tag must point at the corrected HEAD"
+    );
+}

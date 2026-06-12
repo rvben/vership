@@ -390,13 +390,20 @@ fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
     stage_refs.extend(af_strings.iter().map(|s| s.as_str()));
     git::stage_files(&root, &stage_refs)?;
 
-    let commit_msg = if project.is_tag_versioned() {
-        format!("chore: release {tag}")
+    // A resumed or retagged release may have nothing left to commit: the
+    // version bump and changelog already landed in a prior run. Skip the
+    // empty commit and proceed to the tag, which is the step that remains.
+    if git::has_staged_changes(&root)? {
+        let commit_msg = if project.is_tag_versioned() {
+            format!("chore: release {tag}")
+        } else {
+            format!("chore: bump version to {tag}")
+        };
+        git::commit(&root, &commit_msg)?;
+        output::print_step(&format!("Committed: {commit_msg}"));
     } else {
-        format!("chore: bump version to {tag}")
-    };
-    git::commit(&root, &commit_msg)?;
-    output::print_step(&format!("Committed: {commit_msg}"));
+        output::print_step("Nothing to commit (release commit already exists)");
+    }
 
     git::create_tag(&root, &tag)?;
     output::print_step(&format!("Tagged: {tag}"));
