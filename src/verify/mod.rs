@@ -1,5 +1,102 @@
 pub mod checkers;
+pub mod report;
 pub mod targets;
+
+use std::path::Path;
+
+use crate::config::Config;
+use crate::error::{Error, Result};
+use crate::output::OutputConfig;
+
+/// Run post-release verification for `version` (defaults to the on-disk version).
+pub fn run(
+    version: Option<&str>,
+    only: Option<&str>,
+    skip: Option<&str>,
+    output: &OutputConfig,
+) -> Result<()> {
+    let root = Path::new(".");
+    let config = Config::load(Path::new("vership.toml"));
+
+    let version = resolve_version(root, &config, version)?;
+    let tag = format!("v{version}");
+
+    let remote = crate::git::remote_url(root)?;
+    let detected = targets::detect_targets(root, &config.verify, remote.as_deref())?;
+    let targets = targets::filter_targets(detected, only, skip)?;
+    if targets.is_empty() {
+        return Err(Error::Config(
+            "no verify targets detected or selected".to_string(),
+        ));
+    }
+
+    let agent = checkers::default_agent();
+    let reports: Vec<TargetReport> = targets
+        .iter()
+        .map(|target| {
+            let result = match target {
+                targets::Target::Tag => match crate::git::remote_tag_exists(root, &tag) {
+                    Ok(true) => CheckResult::Found(tag.clone()),
+                    Ok(false) => CheckResult::NotFound,
+                    Err(e) => CheckResult::Error(e.to_string()),
+                },
+                targets::Target::Release => checkers::release(root, &tag, &version),
+                targets::Target::Crates { name } => {
+                    checkers::crates(&agent, checkers::CRATES_IO, name, &version)
+                }
+                targets::Target::Pypi { name } => {
+                    checkers::pypi(&agent, checkers::PYPI, name, &version)
+                }
+                targets::Target::Npm { name } => {
+                    checkers::npm(&agent, checkers::NPM, name, &version)
+                }
+                targets::Target::Homebrew { tap, formula } => {
+                    checkers::homebrew(&agent, checkers::RAW_GITHUB, tap, formula, &version)
+                }
+                targets::Target::Ghcr { image } => {
+                    checkers::ghcr(&agent, checkers::GHCR, image, &version)
+                }
+            };
+            TargetReport::from_result(target.name(), result)
+        })
+        .collect();
+
+    report::render(&version, &reports, output);
+
+    let failed: Vec<&str> = reports
+        .iter()
+        .filter(|r| !r.ok)
+        .map(|r| r.name.as_str())
+        .collect();
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Unpublished(format!(
+            "{version} missing on: {}",
+            failed.join(", ")
+        )))
+    }
+}
+
+/// Explicit version arg (with or without leading v) wins; otherwise the
+/// on-disk project version; otherwise the latest semver tag.
+fn resolve_version(root: &Path, config: &Config, explicit: Option<&str>) -> Result<String> {
+    if let Some(v) = explicit {
+        return Ok(v.trim_start_matches('v').to_string());
+    }
+    let project_type = config.project.project_type.as_deref();
+    if let Ok(project) = crate::project::detect(root, project_type)
+        && let Ok(version) = project.read_version(root)
+    {
+        return Ok(version.to_string());
+    }
+    if let Some(tag) = crate::git::latest_semver_tag(root)? {
+        return Ok(tag.trim_start_matches('v').to_string());
+    }
+    Err(Error::Version(
+        "could not determine version to verify: pass it explicitly".to_string(),
+    ))
+}
 
 /// Result of checking one target for a specific version.
 #[derive(Debug, Clone, PartialEq, Eq)]

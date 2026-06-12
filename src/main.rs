@@ -76,6 +76,16 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             offset,
             fields,
         } => vership::release::status(&output, limit, offset, fields.as_deref()),
+        Command::Verify {
+            version,
+            targets,
+            skip,
+        } => vership::verify::run(
+            version.as_deref(),
+            targets.as_deref(),
+            skip.as_deref(),
+            &output,
+        ),
         Command::Preflight => vership::release::preflight(),
         Command::Changelog => vership::release::changelog_preview(),
         Command::Bump {
@@ -204,6 +214,49 @@ mod tests {
         match cli.command {
             Command::Status { limit, .. } => assert_eq!(limit, 5),
             _ => panic!("expected Status"),
+        }
+    }
+
+    #[test]
+    fn cli_verify_defaults() {
+        let cli = Cli::try_parse_from(["vership", "verify"]).unwrap();
+        match cli.command {
+            Command::Verify {
+                version,
+                targets,
+                skip,
+            } => {
+                assert!(version.is_none());
+                assert!(targets.is_none());
+                assert!(skip.is_none());
+            }
+            _ => panic!("expected Verify"),
+        }
+    }
+
+    #[test]
+    fn cli_verify_with_version_and_filters() {
+        let cli = Cli::try_parse_from([
+            "vership",
+            "verify",
+            "1.2.3",
+            "--targets",
+            "crates,pypi",
+            "--skip",
+            "npm",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Verify {
+                version,
+                targets,
+                skip,
+            } => {
+                assert_eq!(version.as_deref(), Some("1.2.3"));
+                assert_eq!(targets.as_deref(), Some("crates,pypi"));
+                assert_eq!(skip.as_deref(), Some("npm"));
+            }
+            _ => panic!("expected Verify"),
         }
     }
 

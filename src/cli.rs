@@ -94,6 +94,18 @@ pub enum Command {
         #[arg(long, value_name = "FIELDS")]
         fields: Option<String>,
     },
+    /// Verify a released version is live on all publish targets
+    /// (git tag, GitHub release, crates.io, PyPI, npm, Homebrew tap, ghcr).
+    Verify {
+        /// Version to verify (defaults to the on-disk version)
+        version: Option<String>,
+        /// Comma-separated subset of targets to check
+        #[arg(long, value_name = "LIST")]
+        targets: Option<String>,
+        /// Comma-separated targets to skip
+        #[arg(long, value_name = "LIST")]
+        skip: Option<String>,
+    },
     /// Configuration management
     #[command(subcommand)]
     Config(ConfigCommand),
