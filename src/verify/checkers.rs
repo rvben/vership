@@ -88,11 +88,17 @@ pub fn homebrew(
         }
         Err(e) => return CheckResult::Error(e.to_string()),
     };
-    if body.contains(version) {
+    // Digit boundaries so 1.2.3 never matches inside v1.2.30 or 11.2.3.
+    let exact = regex::Regex::new(&format!(
+        r"(?:^|[^\d]){}(?:[^\d]|$)",
+        regex::escape(version)
+    ))
+    .expect("valid regex");
+    if exact.is_match(&body) {
         return CheckResult::Found(version.to_string());
     }
     // Look for whatever version the formula does carry.
-    let re = regex::Regex::new(r#"(?:version\s+"|/v)(\d+\.\d+\.\d+)"#).expect("valid regex");
+    let re = regex::Regex::new(r#"(?:version\s+"|/v)(\d+\.\d+(?:\.\d+)*)"#).expect("valid regex");
     match re.captures(&body) {
         Some(captures) => CheckResult::FoundOld(captures[1].to_string()),
         None => CheckResult::NotFound,

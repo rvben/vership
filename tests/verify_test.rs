@@ -421,3 +421,57 @@ fn real_registries_find_published_vership() {
         CheckResult::Found(_)
     ));
 }
+
+#[test]
+fn publish_to_private_registry_only_skips_crates() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "Cargo.toml",
+        "[package]\nname = \"internal\"\nversion = \"1.0.0\"\npublish = [\"my-registry\"]\n",
+    );
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://github.com/rvben/internal"),
+    )
+    .unwrap();
+    assert!(!names(&targets).contains(&"crates"));
+}
+
+#[test]
+fn publish_list_naming_crates_io_keeps_crates() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "Cargo.toml",
+        "[package]\nname = \"mycrate\"\nversion = \"1.0.0\"\npublish = [\"crates-io\"]\n",
+    );
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://github.com/rvben/mycrate"),
+    )
+    .unwrap();
+    assert!(names(&targets).contains(&"crates"));
+}
+
+#[test]
+fn homebrew_version_substring_of_newer_version_is_found_old() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/rvben/homebrew-tap/HEAD/Formula/mytool.rb");
+        then.status(200).body(
+            "  url \"https://github.com/rvben/mytool/releases/download/v1.2.30/mytool.tar.gz\"\n",
+        );
+    });
+    let result = checkers::homebrew(
+        &agent(),
+        &server.base_url(),
+        "rvben/homebrew-tap",
+        "mytool",
+        "1.2.3",
+    );
+    assert_eq!(result, CheckResult::FoundOld("1.2.30".to_string()));
+}

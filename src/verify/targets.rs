@@ -108,9 +108,17 @@ pub fn detect_targets(
         let manifest: CargoManifest = toml::from_str(&content)
             .map_err(|e| Error::Config(format!("parse Cargo.toml: {e}")))?;
         if let Some(package) = manifest.package {
-            // `publish = false` opts out; `publish = ["registry"]` or absent
-            // both mean publishable.
-            let publishable = !matches!(&package.publish, Some(toml::Value::Boolean(false)));
+            // `publish = false` opts out entirely; a registry list restricts
+            // publication to the named registries, so crates.io is a target
+            // only when the list names it ("crates-io").
+            let publishable = match &package.publish {
+                None => true,
+                Some(toml::Value::Boolean(b)) => *b,
+                Some(toml::Value::Array(registries)) => {
+                    registries.iter().any(|r| r.as_str() == Some("crates-io"))
+                }
+                Some(_) => true,
+            };
             if publishable && let Some(name) = package.name {
                 targets.push(Target::Crates { name });
             }
