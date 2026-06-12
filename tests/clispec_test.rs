@@ -643,3 +643,54 @@ fn status_fields_selects_computed_commits() {
     );
     assert!(doc["commits"].is_array(), "commits must be an array");
 }
+
+/// The verify command must be declared in the schema with its filters.
+#[test]
+fn schema_includes_verify_command() {
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .args(["schema"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let verify = doc["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "verify")
+        .expect("verify command in schema");
+    assert_eq!(verify["mutating"], false);
+    let args: Vec<&str> = verify["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["name"].as_str().unwrap())
+        .collect();
+    assert!(args.contains(&"version"));
+    assert!(args.contains(&"--targets"));
+    assert!(args.contains(&"--skip"));
+}
+
+/// The unpublished outcome must carry exit code 8 and be retryable.
+#[test]
+fn schema_includes_unpublished_outcome() {
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .args(["schema"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let outcomes = doc["outcomes"].as_array().expect("outcomes section");
+    let unpublished = outcomes
+        .iter()
+        .find(|o| o["kind"] == "unpublished")
+        .expect("unpublished outcome");
+    assert_eq!(unpublished["exit_code"], 8);
+    assert_eq!(unpublished["retryable"], true);
+}

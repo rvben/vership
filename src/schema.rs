@@ -199,6 +199,40 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                 ]
             },
             {
+                "name": "verify",
+                "description": "Verify a released version is live on all publish targets (git tag, GitHub release, crates.io, PyPI, npm, Homebrew tap, ghcr). Exit 0 when all targets pass; outcome 'unpublished' (exit 8, retryable) otherwise. Compose with tarry for waiting: tarry cmd -- vership verify.",
+                "mutating": false,
+                "args": [
+                    {
+                        "name": "version",
+                        "type": "string",
+                        "required": false,
+                        "description": "Version to verify, with or without leading v (defaults to the on-disk version)"
+                    },
+                    {
+                        "name": "--targets",
+                        "type": "string",
+                        "required": false,
+                        "description": "Comma-separated subset of targets to check: tag, release, crates, pypi, npm, homebrew, ghcr"
+                    },
+                    {
+                        "name": "--skip",
+                        "type": "string",
+                        "required": false,
+                        "description": "Comma-separated targets to skip"
+                    }
+                ],
+                "output_fields": [
+                    {"name": "version", "type": "string", "description": "Version that was verified"},
+                    {"name": "ok", "type": "boolean", "description": "True when every target has the version"},
+                    {
+                        "name": "targets",
+                        "type": "array",
+                        "description": "Per-target results: {name, ok, found, detail}"
+                    }
+                ]
+            },
+            {
                 "name": "config",
                 "description": "Configuration management.",
                 "mutating": false,
@@ -242,6 +276,14 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                     }
                 ],
                 "output_fields": []
+            }
+        ],
+        "outcomes": [
+            {
+                "kind": "unpublished",
+                "exit_code": 8,
+                "retryable": true,
+                "description": "One or more publish targets are missing the expected version. Publishing may still be in flight; retry or wait with tarry."
             }
         ],
         "errors": [
