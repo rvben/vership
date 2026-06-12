@@ -23,6 +23,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.7](https://github.com/rvben/vership/compare/v0.5.6...v0.5.7) - 2026-06-12
+
+### Fixed
+
+- skip empty release commit so resume and retag converge to the tag step ([74d7b47](https://github.com/rvben/vership/commit/74d7b477a930d7f329e42dd71b1318dd6f22468f))
+
 ## [0.5.6](https://github.com/rvben/vership/compare/v0.5.5...v0.5.6) - 2026-06-12
 
 ### Added
