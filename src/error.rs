@@ -7,6 +7,7 @@ pub mod exit_codes {
     pub const HOOK_FAILED: i32 = 5;
     pub const VERSION_ERROR: i32 = 6;
     pub const CONFLICT: i32 = 7;
+    pub const UNPUBLISHED: i32 = 8;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +32,11 @@ pub enum Error {
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    /// One or more publish targets are missing the expected version.
+    /// Retryable: publishing may still be in flight.
+    #[error("Unpublished: {0}")]
+    Unpublished(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -47,6 +53,7 @@ impl Error {
             Error::HookFailed(_) => exit_codes::HOOK_FAILED,
             Error::Version(_) => exit_codes::VERSION_ERROR,
             Error::Conflict(_) => exit_codes::CONFLICT,
+            Error::Unpublished(_) => exit_codes::UNPUBLISHED,
             Error::Io(_) | Error::Other(_) => exit_codes::GENERAL_ERROR,
         }
     }
@@ -60,6 +67,7 @@ impl Error {
             Error::HookFailed(_) => "hook_failed",
             Error::Version(_) => "version",
             Error::Conflict(_) => "conflict",
+            Error::Unpublished(_) => "unpublished",
             Error::Io(_) | Error::Other(_) => "error",
         }
     }

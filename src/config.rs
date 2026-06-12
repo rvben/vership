@@ -15,6 +15,7 @@ pub struct Config {
     pub version_files: Vec<VersionFileEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<ArtifactEntry>,
+    pub verify: VerifyConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -75,6 +76,23 @@ pub struct ChecksConfig {
     pub lint_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub test_command: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct VerifyConfig {
+    /// Target names to skip (tag, release, crates, pypi, npm, homebrew, ghcr).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skip: Vec<String>,
+    /// Homebrew tap as owner/repo. Default: <owner>/homebrew-tap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tap: Option<String>,
+    /// Formula name in the tap. Default: the repository name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
+    /// ghcr image as owner/name. Default: <owner>/<repo> lowercased.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 
 impl Default for ProjectConfig {
@@ -189,6 +207,13 @@ pub fn init() -> Result<()> {
 # [[artifacts]]
 # command = "make generate"
 # files = ["generated.json"]     # Files the command produces
+
+# Post-release verification targets (vership verify)
+# [verify]
+# skip = []                        # Targets to skip: tag, release, crates, pypi, npm, homebrew, ghcr
+# tap = "owner/homebrew-tap"       # Homebrew tap repo
+# formula = "name"                 # Formula name (default: repo name)
+# image = "owner/name"             # ghcr image (default: owner/repo lowercased)
 "#;
 
     std::fs::write(path, template)?;

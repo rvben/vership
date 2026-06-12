@@ -109,3 +109,28 @@ fn parse_empty_config_has_empty_version_files_and_artifacts() {
     assert!(config.version_files.is_empty());
     assert!(config.artifacts.is_empty());
 }
+
+#[test]
+fn verify_section_parses() {
+    let config = Config::parse(
+        r#"
+[verify]
+skip = ["npm"]
+tap = "rvben/homebrew-tap"
+formula = "vership"
+image = "rvben/vership"
+"#,
+    )
+    .unwrap();
+    assert_eq!(config.verify.skip, vec!["npm"]);
+    assert_eq!(config.verify.tap.as_deref(), Some("rvben/homebrew-tap"));
+    assert_eq!(config.verify.formula.as_deref(), Some("vership"));
+    assert_eq!(config.verify.image.as_deref(), Some("rvben/vership"));
+}
+
+#[test]
+fn verify_section_defaults_to_empty() {
+    let config = Config::parse("").unwrap();
+    assert!(config.verify.skip.is_empty());
+    assert!(config.verify.tap.is_none());
+}
