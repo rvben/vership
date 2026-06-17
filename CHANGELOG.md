@@ -24,6 +24,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.8](https://github.com/rvben/vership/compare/v0.5.7...v0.5.8) - 2026-06-17
+
+### Added
+
+- **verify**: resolve ghcr credentials for private packages ([c3ae778](https://github.com/rvben/vership/commit/c3ae7787229c37ccd7e08608a632faed1d74befa))
+
 ## [0.5.7](https://github.com/rvben/vership/compare/v0.5.6...v0.5.7) - 2026-06-12
 
 ### Fixed
