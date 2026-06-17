@@ -1,4 +1,5 @@
 use super::CheckResult;
+use base64::Engine;
 
 pub const CRATES_IO: &str = "https://crates.io";
 pub const PYPI: &str = "https://pypi.org";
@@ -105,11 +106,25 @@ pub fn homebrew(
     }
 }
 
-/// ghcr: resolve an anonymous pull token, then probe the tag manifest.
-/// Tries the bare version tag first, then the v-prefixed tag.
-pub fn ghcr(agent: &ureq::Agent, base: &str, image: &str, version: &str) -> CheckResult {
+/// ghcr: resolve a pull token, then probe the tag manifest. Tries the bare
+/// version tag first, then the v-prefixed tag. When `cred` is supplied it is sent
+/// as Basic auth on the token request so PRIVATE packages resolve a scoped pull
+/// token; without it the request is anonymous (public images still work).
+pub fn ghcr(
+    agent: &ureq::Agent,
+    base: &str,
+    image: &str,
+    version: &str,
+    cred: Option<&(String, String)>,
+) -> CheckResult {
     let token_url = format!("{base}/token?scope=repository:{image}:pull");
-    let token = match agent.get(&token_url).set("User-Agent", USER_AGENT).call() {
+    let mut token_req = agent.get(&token_url).set("User-Agent", USER_AGENT);
+    if let Some((username, secret)) = cred {
+        let basic =
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{secret}"));
+        token_req = token_req.set("Authorization", &format!("Basic {basic}"));
+    }
+    let token = match token_req.call() {
         Ok(resp) => match resp.into_json::<serde_json::Value>() {
             Ok(body) => match body["token"].as_str() {
                 Some(token) => token.to_string(),
@@ -144,6 +159,76 @@ pub fn ghcr(agent: &ureq::Agent, base: &str, image: &str, version: &str) -> Chec
         }
     }
     last
+}
+
+/// Resolve a ghcr Basic-auth credential `(username, secret)`. Order: a
+/// `GH_TOKEN` / `GITHUB_TOKEN` env var (CI and explicit scripting), then the
+/// inline `auth` in the docker config (`docker login` on a credsStore-less host,
+/// e.g. CI runners), then None (anonymous - public images still verify). This
+/// lets `verify` reach a private package the operator is logged in to, instead of
+/// failing on an anonymous 401.
+///
+/// It deliberately does NOT invoke docker credential HELPERS (`credsStore` /
+/// `credHelpers`, e.g. the macOS `osxkeychain` binary): a helper can block
+/// indefinitely or pop a GUI keychain prompt, and `verify` must never hang. On a
+/// helper-backed host, pass `GH_TOKEN` (or make the package public) instead.
+pub fn resolve_ghcr_credential() -> Option<(String, String)> {
+    resolve_ghcr_credential_with(|key| std::env::var(key).ok(), docker_ghcr_credential)
+}
+
+/// Pure core of [`resolve_ghcr_credential`] with the env and docker lookups
+/// injected, so the precedence rules are unit-testable without touching the real
+/// environment or docker config.
+fn resolve_ghcr_credential_with(
+    env: impl Fn(&str) -> Option<String>,
+    docker: impl Fn() -> Option<(String, String)>,
+) -> Option<(String, String)> {
+    if let Some(token) = env("GH_TOKEN").or_else(|| env("GITHUB_TOKEN"))
+        && !token.is_empty()
+    {
+        // ghcr validates the token (password); the username is cosmetic but must
+        // be non-empty. Prefer GITHUB_ACTOR (set in Actions), else the
+        // conventional token-auth placeholder.
+        let username = env("GITHUB_ACTOR")
+            .filter(|actor| !actor.is_empty())
+            .unwrap_or_else(|| "x-access-token".to_string());
+        return Some((username, token));
+    }
+    docker()
+}
+
+/// Resolve a ghcr credential from the INLINE `auth` in the docker config file
+/// (`$DOCKER_CONFIG/config.json` or `~/.docker/config.json`). Never spawns a
+/// credential helper, so it cannot block or prompt.
+fn docker_ghcr_credential() -> Option<(String, String)> {
+    let path = match std::env::var("DOCKER_CONFIG") {
+        Ok(dir) if !dir.is_empty() => std::path::PathBuf::from(dir).join("config.json"),
+        _ => dirs::home_dir()?.join(".docker").join("config.json"),
+    };
+    let contents = std::fs::read_to_string(path).ok()?;
+    parse_inline_ghcr_auth(&contents)
+}
+
+/// Parse the inline ghcr Basic credential from a docker `config.json` body:
+/// `auths["ghcr.io"].auth` (or the `https://ghcr.io` key) is base64 of
+/// `user:secret`. Returns None when absent, helper-backed (no inline `auth`), or
+/// missing a secret.
+fn parse_inline_ghcr_auth(config_json: &str) -> Option<(String, String)> {
+    let json: serde_json::Value = serde_json::from_str(config_json).ok()?;
+    let auths = json.get("auths")?.as_object()?;
+    let entry = auths
+        .get("ghcr.io")
+        .or_else(|| auths.get("https://ghcr.io"))?;
+    let encoded = entry.get("auth")?.as_str()?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let pair = String::from_utf8(decoded).ok()?;
+    let (username, secret) = pair.split_once(':')?;
+    if secret.is_empty() {
+        return None;
+    }
+    Some((username.to_string(), secret.to_string()))
 }
 
 /// Interpret `gh release view <tag> --json name,assets` output.
@@ -182,5 +267,117 @@ pub fn release(root: &std::path::Path, tag: &str, version: &str) -> CheckResult 
             CheckResult::Error("gh is not installed".to_string())
         }
         Err(e) => CheckResult::Error(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_from(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let owned: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |k| {
+            owned
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.clone())
+        }
+    }
+
+    #[test]
+    fn env_token_resolves_with_x_access_token_username_by_default() {
+        let cred = resolve_ghcr_credential_with(env_from(&[("GH_TOKEN", "ght")]), || None);
+        assert_eq!(
+            cred,
+            Some(("x-access-token".to_string(), "ght".to_string()))
+        );
+    }
+
+    #[test]
+    fn github_actor_is_used_as_the_basic_username() {
+        let cred = resolve_ghcr_credential_with(
+            env_from(&[("GITHUB_TOKEN", "tok"), ("GITHUB_ACTOR", "octocat")]),
+            || None,
+        );
+        assert_eq!(cred, Some(("octocat".to_string(), "tok".to_string())));
+    }
+
+    #[test]
+    fn gh_token_takes_precedence_over_github_token() {
+        let cred = resolve_ghcr_credential_with(
+            env_from(&[("GH_TOKEN", "primary"), ("GITHUB_TOKEN", "secondary")]),
+            || None,
+        );
+        assert_eq!(cred.unwrap().1, "primary");
+    }
+
+    #[test]
+    fn empty_env_token_is_ignored_and_falls_back_to_docker() {
+        let cred = resolve_ghcr_credential_with(env_from(&[("GH_TOKEN", "")]), || {
+            Some(("dockeruser".to_string(), "dockerpass".to_string()))
+        });
+        assert_eq!(
+            cred,
+            Some(("dockeruser".to_string(), "dockerpass".to_string()))
+        );
+    }
+
+    #[test]
+    fn no_env_falls_back_to_docker_credential() {
+        let cred = resolve_ghcr_credential_with(env_from(&[]), || {
+            Some(("du".to_string(), "dp".to_string()))
+        });
+        assert_eq!(cred, Some(("du".to_string(), "dp".to_string())));
+    }
+
+    #[test]
+    fn no_credential_anywhere_is_none() {
+        let cred = resolve_ghcr_credential_with(env_from(&[]), || None);
+        assert_eq!(cred, None);
+    }
+
+    fn config_with_ghcr_auth(key: &str, user_pass: &str) -> String {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(user_pass);
+        serde_json::json!({ "auths": { key: { "auth": b64 } } }).to_string()
+    }
+
+    #[test]
+    fn inline_auth_decodes_user_and_secret() {
+        let cfg = config_with_ghcr_auth("ghcr.io", "alice:s3cret");
+        assert_eq!(
+            parse_inline_ghcr_auth(&cfg),
+            Some(("alice".to_string(), "s3cret".to_string()))
+        );
+    }
+
+    #[test]
+    fn inline_auth_accepts_https_prefixed_registry_key() {
+        let cfg = config_with_ghcr_auth("https://ghcr.io", "bob:tok");
+        assert_eq!(
+            parse_inline_ghcr_auth(&cfg),
+            Some(("bob".to_string(), "tok".to_string()))
+        );
+    }
+
+    #[test]
+    fn inline_auth_absent_or_helper_backed_is_none() {
+        // credsStore entry with no inline `auth` (helper-backed) -> None.
+        let helper = serde_json::json!({ "auths": { "ghcr.io": {} }, "credsStore": "osxkeychain" })
+            .to_string();
+        assert_eq!(parse_inline_ghcr_auth(&helper), None);
+        // A different registry only.
+        let other = config_with_ghcr_auth("registry.example.com", "u:p");
+        assert_eq!(parse_inline_ghcr_auth(&other), None);
+        // Empty config.
+        assert_eq!(parse_inline_ghcr_auth("{}"), None);
+    }
+
+    #[test]
+    fn inline_auth_with_empty_secret_is_none() {
+        let cfg = config_with_ghcr_auth("ghcr.io", "alice:");
+        assert_eq!(parse_inline_ghcr_auth(&cfg), None);
     }
 }

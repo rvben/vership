@@ -54,7 +54,8 @@ pub fn run(
                     checkers::homebrew(&agent, checkers::RAW_GITHUB, tap, formula, &version)
                 }
                 targets::Target::Ghcr { image } => {
-                    checkers::ghcr(&agent, checkers::GHCR, image, &version)
+                    let cred = checkers::resolve_ghcr_credential();
+                    checkers::ghcr(&agent, checkers::GHCR, image, &version, cred.as_ref())
                 }
             };
             TargetReport::from_result(target.name(), result)

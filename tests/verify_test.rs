@@ -343,7 +343,7 @@ fn ghcr_found_when_tag_manifest_exists() {
             .header("authorization", "Bearer anon-token");
         then.status(200).json_body(serde_json::json!({}));
     });
-    let result = checkers::ghcr(&agent(), &server.base_url(), "rvben/myapp", "1.2.3");
+    let result = checkers::ghcr(&agent(), &server.base_url(), "rvben/myapp", "1.2.3", None);
     assert_eq!(result, CheckResult::Found("1.2.3".to_string()));
 }
 
@@ -363,7 +363,7 @@ fn ghcr_falls_back_to_v_prefixed_tag() {
         when.method(GET).path("/v2/rvben/myapp/manifests/v1.2.3");
         then.status(200).json_body(serde_json::json!({}));
     });
-    let result = checkers::ghcr(&agent(), &server.base_url(), "rvben/myapp", "1.2.3");
+    let result = checkers::ghcr(&agent(), &server.base_url(), "rvben/myapp", "1.2.3", None);
     assert_eq!(result, CheckResult::Found("v1.2.3".to_string()));
 }
 
@@ -380,8 +380,43 @@ fn ghcr_both_tags_missing_is_not_found() {
             .path_matches(Regex::new("/v2/rvben/myapp/manifests/.*").unwrap());
         then.status(404);
     });
-    let result = checkers::ghcr(&agent(), &server.base_url(), "rvben/myapp", "1.2.3");
+    let result = checkers::ghcr(&agent(), &server.base_url(), "rvben/myapp", "1.2.3", None);
     assert_eq!(result, CheckResult::NotFound);
+}
+
+#[test]
+fn ghcr_sends_basic_auth_when_credential_present() {
+    use base64::Engine;
+    let server = MockServer::start();
+    // The token endpoint only matches when Basic auth for the credential is sent;
+    // without it the token fetch fails and the check errors (proving the cred is
+    // attached). This is the private-package path that anonymous access 401s.
+    let expected = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode("ghuser:ghtoken")
+    );
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/token")
+            .header("authorization", &expected);
+        then.status(200)
+            .json_body(serde_json::json!({"token": "scoped-token"}));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/v2/rvben/myapp/manifests/1.2.3")
+            .header("authorization", "Bearer scoped-token");
+        then.status(200).json_body(serde_json::json!({}));
+    });
+    let cred = ("ghuser".to_string(), "ghtoken".to_string());
+    let result = checkers::ghcr(
+        &agent(),
+        &server.base_url(),
+        "rvben/myapp",
+        "1.2.3",
+        Some(&cred),
+    );
+    assert_eq!(result, CheckResult::Found("1.2.3".to_string()));
 }
 
 #[test]
