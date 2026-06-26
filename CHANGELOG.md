@@ -25,6 +25,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.9](https://github.com/rvben/vership/compare/v0.5.8...v0.5.9) - 2026-06-26
+
+### Added
+
+- **ansible**: detect galaxy.yml and bump the collection version ([866fb11](https://github.com/rvben/vership/commit/866fb11b5889d2b3aa51d5a3829d73a999ff68be))
+
 ## [0.5.8](https://github.com/rvben/vership/compare/v0.5.7...v0.5.8) - 2026-06-17
 
 ### Added
