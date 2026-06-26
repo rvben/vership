@@ -3,17 +3,37 @@ use std::path::Path;
 use crate::error::{Error, Result};
 
 use super::ProjectType;
+use super::ansible::AnsibleProject;
 use super::go::GoProject;
 use super::gradle::GradleProject;
 use super::node::NodeProject;
 use super::python::PythonProject;
 use super::rust::RustProject;
 use super::rust_maturin::RustMaturinProject;
+use crate::version;
+
+/// Whether `root` holds an Ansible collection: a `galaxy.yml` carrying both
+/// `namespace` and `name`, the two keys that form a collection's identity
+/// (the FQCN `namespace.name`). Detection deliberately does not require
+/// `version` — a collection with a missing or malformed version is still an
+/// Ansible collection, and surfacing a precise "no version in galaxy.yml" error
+/// from `read_version` is far clearer than falling through to
+/// "no supported project type detected".
+fn is_ansible_collection(root: &Path) -> bool {
+    let galaxy = root.join("galaxy.yml");
+    let Ok(content) = std::fs::read_to_string(&galaxy) else {
+        return false;
+    };
+    ["namespace", "name"]
+        .iter()
+        .all(|key| version::parse_galaxy_field(&content, key).is_some())
+}
 
 /// Detect the project type rooted at `root`.
 ///
 /// When `project_type_override` is provided it takes precedence over auto-detection.
-/// Accepted values: `"rust"`, `"rust-maturin"`, `"node"`, `"go"`, `"python"`, `"gradle"`.
+/// Accepted values: `"rust"`, `"rust-maturin"`, `"node"`, `"go"`, `"python"`,
+/// `"gradle"`, `"ansible-collection"` (alias `"ansible"`).
 pub fn detect(root: &Path, project_type_override: Option<&str>) -> Result<Box<dyn ProjectType>> {
     if let Some(override_type) = project_type_override {
         return match override_type {
@@ -23,10 +43,17 @@ pub fn detect(root: &Path, project_type_override: Option<&str>) -> Result<Box<dy
             "go" => Ok(Box::new(GoProject::new())),
             "python" => Ok(Box::new(PythonProject::new())),
             "gradle" => Ok(Box::new(GradleProject::new())),
+            "ansible-collection" | "ansible" => Ok(Box::new(AnsibleProject::new())),
             other => Err(Error::Config(format!(
-                "unknown project type '{other}': valid values are \"rust\", \"rust-maturin\", \"node\", \"go\", \"python\", \"gradle\""
+                "unknown project type '{other}': valid values are \"rust\", \"rust-maturin\", \"node\", \"go\", \"python\", \"gradle\", \"ansible-collection\""
             ))),
         };
+    }
+
+    // 0. galaxy.yml (namespace + name + version) → Ansible collection. Checked
+    //    first so it wins over a tooling-only pyproject.toml in the same repo.
+    if is_ansible_collection(root) {
+        return Ok(Box::new(AnsibleProject::new()));
     }
 
     let cargo_toml = root.join("Cargo.toml");
@@ -75,7 +102,7 @@ pub fn detect(root: &Path, project_type_override: Option<&str>) -> Result<Box<dy
     }
 
     Err(Error::Other(
-        "No supported project type detected. Supported: Rust, Rust+Maturin, Node, Go, Python, Gradle."
+        "No supported project type detected. Supported: Rust, Rust+Maturin, Node, Go, Python, Gradle, Ansible Collection."
             .to_string(),
     ))
 }

@@ -178,6 +178,11 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                 ],
                 "output_fields": [
                     {"name": "project_type", "type": "string"},
+                    {
+                        "name": "name",
+                        "type": "string",
+                        "description": "Package identity when meaningful (e.g. an Ansible collection FQCN namespace.name); omitted otherwise"
+                    },
                     {"name": "current_version", "type": "string"},
                     {"name": "latest_tag", "type": "string | null"},
                     {"name": "unreleased_commits", "type": "integer"},

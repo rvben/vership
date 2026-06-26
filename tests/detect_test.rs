@@ -233,3 +233,73 @@ fn detect_no_project() {
     let result = project::detect(dir.path(), None);
     assert!(result.is_err());
 }
+
+#[test]
+fn detect_ansible_collection() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("galaxy.yml"),
+        "namespace: hda\nname: platform\nversion: \"0.0.2\"\n",
+    )
+    .unwrap();
+    let p = project::detect(dir.path(), None).unwrap();
+    assert_eq!(p.name(), "Ansible Collection");
+}
+
+#[test]
+fn detect_ansible_wins_over_tooling_pyproject() {
+    // A collection repo carrying a tooling-only pyproject.toml (ruff/ansible-lint)
+    // must resolve to the Ansible collection, not Python.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("galaxy.yml"),
+        "namespace: hda\nname: platform\nversion: \"0.0.2\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[tool.ruff]\nline-length = 100\n",
+    )
+    .unwrap();
+    let p = project::detect(dir.path(), None).unwrap();
+    assert_eq!(p.name(), "Ansible Collection");
+}
+
+#[test]
+fn detect_galaxy_yml_without_identity_keys_is_not_a_collection() {
+    // namespace + name form a collection's identity. A galaxy.yml without them
+    // is not enough to claim the Ansible type; detection must fall through.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("galaxy.yml"), "version: \"0.0.2\"\n").unwrap();
+    let result = project::detect(dir.path(), None);
+    assert!(result.is_err());
+}
+
+#[test]
+fn detect_ansible_collection_without_version_still_detects() {
+    // A collection whose version is missing or malformed is still an Ansible
+    // collection: detect it so read_version can report a precise error rather
+    // than the misleading "no supported project type detected".
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("galaxy.yml"),
+        "namespace: hda\nname: platform\n",
+    )
+    .unwrap();
+    let p = project::detect(dir.path(), None).unwrap();
+    assert_eq!(p.name(), "Ansible Collection");
+}
+
+#[test]
+fn detect_override_ansible_collection() {
+    let dir = TempDir::new().unwrap();
+    let p = project::detect(dir.path(), Some("ansible-collection")).unwrap();
+    assert_eq!(p.name(), "Ansible Collection");
+}
+
+#[test]
+fn detect_override_ansible_alias() {
+    let dir = TempDir::new().unwrap();
+    let p = project::detect(dir.path(), Some("ansible")).unwrap();
+    assert_eq!(p.name(), "Ansible Collection");
+}

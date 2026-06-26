@@ -22,7 +22,13 @@ pub fn run(
     let tag = format!("v{version}");
 
     let remote = crate::git::remote_url(root)?;
-    let detected = targets::detect_targets(root, &config.verify, remote.as_deref())?;
+    // Best-effort: a project type whose only published artifact is the git tag
+    // (e.g. an Ansible collection) verifies tag-only. Detection failures fall
+    // back to the default (full target detection).
+    let tag_only = crate::project::detect(root, config.project.project_type.as_deref())
+        .map(|p| p.publishes_only_git_tag())
+        .unwrap_or(false);
+    let detected = targets::detect_targets(root, &config.verify, remote.as_deref(), tag_only)?;
     let targets = targets::filter_targets(detected, only, skip)?;
     if targets.is_empty() {
         return Err(Error::Config(

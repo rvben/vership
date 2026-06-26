@@ -379,3 +379,191 @@ fn release_retags_corrected_head_after_fix_commit() {
         "tag must point at the corrected HEAD"
     );
 }
+
+/// Stand up a committed Ansible collection repo (galaxy.yml only) with one
+/// unreleased conventional commit, ready for a bump.
+fn setup_ansible_collection(root: &Path, galaxy: &str) {
+    init_repo(root);
+    fs::write(root.join("galaxy.yml"), galaxy).unwrap();
+    git(root, &["add", "galaxy.yml"]);
+    git(root, &["commit", "-m", "chore: initial"]);
+
+    fs::write(root.join("roles.txt"), "a role").unwrap();
+    git(root, &["add", "roles.txt"]);
+    git(root, &["commit", "-m", "feat: add a role"]);
+}
+
+/// `vership status --output json` on a galaxy.yml-only repo reports the
+/// Ansible-collection type, the version from galaxy.yml, and the FQCN.
+#[test]
+fn ansible_status_reports_type_version_and_fqcn() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_ansible_collection(root, "namespace: hda\nname: platform\nversion: \"0.0.2\"\n");
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["status", "--output", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("status emits valid json");
+    assert_eq!(json["project_type"], "Ansible Collection");
+    assert_eq!(json["current_version"], "0.0.2");
+    assert_eq!(json["name"], "hda.platform");
+}
+
+/// `bump patch --dry-run` previews 0.0.2 -> 0.0.3 and mutates nothing: the
+/// galaxy.yml is untouched and no tag is created.
+#[test]
+fn ansible_bump_patch_dry_run_makes_no_changes() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let galaxy = "namespace: hda\nname: platform\nversion: \"0.0.2\"\n";
+    setup_ansible_collection(root, galaxy);
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--dry-run", "--skip-checks", "--no-push"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("0.0.2") && stderr.contains("0.0.3"),
+        "dry run previews the version transition, got:\n{stderr}"
+    );
+    assert!(stderr.contains("Dry run"), "dry run is announced");
+
+    // Nothing changed on disk or in git.
+    assert_eq!(fs::read_to_string(root.join("galaxy.yml")).unwrap(), galaxy);
+    assert!(!root.join("CHANGELOG.md").exists());
+    assert!(!tag_exists(root, "v0.0.3"));
+}
+
+/// A real `bump patch` rewrites only the version line (quotes preserved),
+/// generates CHANGELOG.md, commits, and tags v0.0.3 (no push).
+#[test]
+fn ansible_bump_patch_rewrites_single_line_and_tags() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let galaxy = "# managed by vership\nnamespace: hda\nname: platform\nversion: \"0.0.2\"\nreadme: README.md\n";
+    setup_ansible_collection(root, galaxy);
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--no-push"])
+        .assert()
+        .success();
+
+    // Only the version line changed; quoting, comments, and key order intact.
+    let written = fs::read_to_string(root.join("galaxy.yml")).unwrap();
+    assert_eq!(
+        written,
+        "# managed by vership\nnamespace: hda\nname: platform\nversion: \"0.0.3\"\nreadme: README.md\n"
+    );
+
+    // Changelog generated and tag created with the v prefix.
+    let changelog = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+    assert!(changelog.contains("## [0.0.3]"));
+    assert!(tag_exists(root, "v0.0.3"), "tag v0.0.3 must be created");
+}
+
+/// Resuming an interrupted Ansible bump (galaxy.yml written but never
+/// committed) must commit the bumped manifest so the tag points at a tree whose
+/// galaxy.yml equals the tag. A collection is installed by git ref, so a tag
+/// whose galaxy.yml carries the prior version would ship the wrong version.
+#[test]
+fn ansible_resume_commits_uncommitted_manifest_so_tag_matches() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    init_repo(root);
+    fs::write(
+        root.join("galaxy.yml"),
+        "namespace: hda\nname: platform\nversion: \"0.0.2\"\n",
+    )
+    .unwrap();
+    git(root, &["add", "galaxy.yml"]);
+    git(root, &["commit", "-m", "chore: initial"]);
+    git(root, &["tag", "-a", "v0.0.2", "-m", "v0.0.2"]);
+    fs::write(root.join("roles.txt"), "a role").unwrap();
+    git(root, &["add", "roles.txt"]);
+    git(root, &["commit", "-m", "feat: add a role"]);
+
+    // Simulate an interrupted bump: the version is written to disk but the
+    // commit never happened, leaving galaxy.yml dirty at the new version.
+    fs::write(
+        root.join("galaxy.yml"),
+        "namespace: hda\nname: platform\nversion: \"0.0.3\"\n",
+    )
+    .unwrap();
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["resume", "--skip-checks", "--no-push"])
+        .assert()
+        .success();
+
+    assert!(tag_exists(root, "v0.0.3"), "tag v0.0.3 must be created");
+
+    // The tagged tree's galaxy.yml must carry the released version.
+    let tagged = Command::new("git")
+        .args(["show", "v0.0.3:galaxy.yml"])
+        .current_dir(root)
+        .output()
+        .expect("git runs");
+    let tagged = String::from_utf8_lossy(&tagged.stdout);
+    assert!(
+        tagged.contains("version: \"0.0.3\""),
+        "tagged galaxy.yml must be at 0.0.3, got:\n{tagged}"
+    );
+
+    // No bumped manifest left stranded in the working tree.
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(root)
+        .output()
+        .expect("git runs");
+    assert!(
+        String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+        "working tree must be clean after resume"
+    );
+}
+
+/// `minor` and `major` bumps from 0.0.2 produce 0.1.0 and 1.0.0.
+#[test]
+fn ansible_bump_minor_and_major() {
+    for (level, expected_version, expected_tag) in
+        [("minor", "0.1.0", "v0.1.0"), ("major", "1.0.0", "v1.0.0")]
+    {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        setup_ansible_collection(root, "namespace: hda\nname: platform\nversion: \"0.0.2\"\n");
+
+        AssertCommand::cargo_bin("vership")
+            .unwrap()
+            .current_dir(root)
+            .args(["bump", level, "--skip-checks", "--no-push"])
+            .assert()
+            .success();
+
+        let written = fs::read_to_string(root.join("galaxy.yml")).unwrap();
+        assert!(
+            written.contains(&format!("version: \"{expected_version}\"")),
+            "{level} bump should yield {expected_version}, got:\n{written}"
+        );
+        assert!(
+            tag_exists(root, expected_tag),
+            "tag {expected_tag} must exist"
+        );
+    }
+}

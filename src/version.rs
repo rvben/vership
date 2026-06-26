@@ -71,6 +71,52 @@ pub fn replace_gradle_buildscript_version(content: &str, new_version: &Version) 
     }
 }
 
+/// Read a top-level scalar field (e.g. `namespace`, `name`, `version`) from a
+/// `galaxy.yml`, stripping surrounding quotes and a trailing inline comment.
+///
+/// Matching is anchored to column 0 so only top-level mapping keys are read,
+/// never a nested `version:` inside another block. The `regex` crate has no
+/// backreferences, so the opening and closing quotes are captured as
+/// independent groups and the field is rejected (returns None) unless they
+/// balance: an unterminated or mismatched quote (`version: "0.0.2`) is a
+/// malformed manifest, not a value to be silently accepted.
+pub fn parse_galaxy_field(content: &str, key: &str) -> Option<String> {
+    let re = Regex::new(&format!(
+        r#"(?m)^{}[ \t]*:[ \t]*(["']?)([^"'\r\n#]+?)(["']?)[ \t]*(?:#[^\r\n]*)?\r?$"#,
+        regex::escape(key)
+    ))
+    .expect("valid regex");
+    let caps = re.captures(content)?;
+    if caps[1] != caps[3] {
+        return None;
+    }
+    Some(caps[2].trim().to_string())
+}
+
+/// Surgically rewrite only the top-level `version:` line in a `galaxy.yml`,
+/// preserving the surrounding quote style (`"..."`, `'...'`, or unquoted) and
+/// any trailing inline comment. Returns None if no `version:` line is present
+/// or its quoting is unbalanced (a malformed manifest is never rewritten).
+pub fn replace_galaxy_version(content: &str, new_version: &Version) -> Option<String> {
+    let re = Regex::new(
+        r#"(?m)^(version[ \t]*:[ \t]*)(["']?)[^"'\r\n#]+?(["']?)([ \t]*(?:#[^\r\n]*)?\r?)$"#,
+    )
+    .expect("valid regex");
+    let caps = re.captures(content)?;
+    if caps[2] != caps[3] {
+        return None;
+    }
+    Some(
+        re.replace(content, |caps: &regex::Captures| {
+            format!(
+                "{}{}{}{}{}",
+                &caps[1], &caps[2], new_version, &caps[3], &caps[4]
+            )
+        })
+        .to_string(),
+    )
+}
+
 pub fn bump(version: Version, level: BumpLevel) -> Version {
     match level {
         BumpLevel::Patch => Version::new(version.major, version.minor, version.patch + 1),

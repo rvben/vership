@@ -29,6 +29,7 @@ pub fn status(
     let config = Config::load(&root.join("vership.toml"));
     let project = project::detect(&root, config.project.project_type.as_deref())?;
     let current_version = project.read_version(&root)?;
+    let package_name = project.package_name(&root)?;
     let latest_tag = git::latest_semver_tag(&root)?;
     let all_commits = git::commits_since_tag(&root, latest_tag.as_deref())?;
 
@@ -51,6 +52,9 @@ pub fn status(
             "latest_tag": latest_tag,
             "unreleased_commits": all_commits.len(),
         });
+        if let Some(name) = &package_name {
+            data["name"] = serde_json::json!(name);
+        }
 
         // Build the complete document first, then apply --fields. Filtering
         // before the computed fields exist would make schema-declared fields
@@ -92,6 +96,9 @@ pub fn status(
     } else {
         // Text mode: data goes to stdout per the spec (Principle 3).
         println!("Project type: {}", project.name());
+        if let Some(name) = &package_name {
+            println!("Package: {name}");
+        }
         println!("Current version: {current_version}");
         if let Some(tag) = &latest_tag {
             println!("Latest tag: {tag}");
@@ -292,9 +299,16 @@ fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
         }
         Mutation::None if plan.allow_dirty_tree => {
             output::print_step(&format!(
-                "Bumping {on_disk} → {} (already applied, skipping)",
+                "Bumping {on_disk} → {} (already applied)",
                 plan.target
             ));
+            // The interrupted run already wrote the version to disk, but the
+            // manifest may still be uncommitted. Re-write it (a no-op when the
+            // value already matches) so it is staged and the release commit and
+            // tag contain the version change instead of the stale prior value.
+            if !opts.dry_run {
+                project.write_version(&root, &plan.target)?;
+            }
             Vec::new()
         }
         Mutation::None => {

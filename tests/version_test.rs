@@ -1,7 +1,8 @@
 use semver::Version;
 use vership::version::{
-    parse_cargo_toml_version, parse_package_json_version, parse_pyproject_version,
-    replace_cargo_toml_version, replace_package_json_version, replace_pyproject_version,
+    parse_cargo_toml_version, parse_galaxy_field, parse_package_json_version,
+    parse_pyproject_version, replace_cargo_toml_version, replace_galaxy_version,
+    replace_package_json_version, replace_pyproject_version,
 };
 
 #[test]
@@ -243,4 +244,146 @@ packages = ["myapp"]
 "#;
     let result = parse_pyproject_version(content);
     assert!(result.is_err());
+}
+
+#[test]
+fn parse_galaxy_quoted_version() {
+    let content = "namespace: hda\nname: platform\nversion: \"0.0.2\"\n";
+    assert_eq!(
+        parse_galaxy_field(content, "version").as_deref(),
+        Some("0.0.2")
+    );
+}
+
+#[test]
+fn parse_galaxy_unquoted_version() {
+    let content = "namespace: hda\nname: platform\nversion: 0.0.2\n";
+    assert_eq!(
+        parse_galaxy_field(content, "version").as_deref(),
+        Some("0.0.2")
+    );
+}
+
+#[test]
+fn parse_galaxy_single_quoted_version() {
+    let content = "version: '1.4.0'\n";
+    assert_eq!(
+        parse_galaxy_field(content, "version").as_deref(),
+        Some("1.4.0")
+    );
+}
+
+#[test]
+fn parse_galaxy_version_with_trailing_comment() {
+    let content = "version: \"0.0.2\"  # bump me\n";
+    assert_eq!(
+        parse_galaxy_field(content, "version").as_deref(),
+        Some("0.0.2")
+    );
+}
+
+#[test]
+fn parse_galaxy_namespace_and_name_fields() {
+    let content = "namespace: hda\nname: platform\nversion: \"0.0.2\"\n";
+    assert_eq!(
+        parse_galaxy_field(content, "namespace").as_deref(),
+        Some("hda")
+    );
+    assert_eq!(
+        parse_galaxy_field(content, "name").as_deref(),
+        Some("platform")
+    );
+}
+
+#[test]
+fn parse_galaxy_does_not_match_nested_version_key() {
+    // A `version:` nested under another mapping (indented) must not be read as
+    // the collection version; only the column-0 top-level key counts.
+    let content = "namespace: hda\nname: platform\nversion: \"0.0.2\"\ndependencies:\n  some.dep:\n    version: \"9.9.9\"\n";
+    assert_eq!(
+        parse_galaxy_field(content, "version").as_deref(),
+        Some("0.0.2")
+    );
+}
+
+#[test]
+fn parse_galaxy_version_absent() {
+    let content = "namespace: hda\nname: platform\n";
+    assert_eq!(parse_galaxy_field(content, "version"), None);
+}
+
+#[test]
+fn replace_galaxy_version_preserves_double_quotes() {
+    let content = "namespace: hda\nname: platform\nversion: \"0.0.2\"\n";
+    let updated = replace_galaxy_version(content, &Version::new(0, 0, 3)).unwrap();
+    assert!(updated.contains("version: \"0.0.3\""));
+    assert!(!updated.contains("0.0.2"));
+}
+
+#[test]
+fn replace_galaxy_version_keeps_unquoted_unquoted() {
+    let content = "version: 0.0.2\n";
+    let updated = replace_galaxy_version(content, &Version::new(0, 0, 3)).unwrap();
+    assert_eq!(updated, "version: 0.0.3\n");
+}
+
+#[test]
+fn replace_galaxy_version_preserves_single_quotes() {
+    let content = "version: '0.0.2'\n";
+    let updated = replace_galaxy_version(content, &Version::new(0, 0, 3)).unwrap();
+    assert_eq!(updated, "version: '0.0.3'\n");
+}
+
+#[test]
+fn replace_galaxy_version_preserves_comments_and_key_order() {
+    // Leading comments + non-alphabetical key order: only the version line changes.
+    let content = "# managed by vership\nname: platform\nnamespace: hda\nreadme: README.md\nversion: \"0.0.2\"  # current\nauthors:\n  - Someone\n";
+    let updated = replace_galaxy_version(content, &Version::new(0, 1, 0)).unwrap();
+    let expected = "# managed by vership\nname: platform\nnamespace: hda\nreadme: README.md\nversion: \"0.1.0\"  # current\nauthors:\n  - Someone\n";
+    assert_eq!(updated, expected);
+}
+
+#[test]
+fn replace_galaxy_version_returns_none_when_absent() {
+    let content = "namespace: hda\nname: platform\n";
+    assert!(replace_galaxy_version(content, &Version::new(0, 0, 3)).is_none());
+}
+
+#[test]
+fn parse_galaxy_version_rejects_unterminated_quote() {
+    // Opening quote with no closing quote is a malformed manifest; do not
+    // silently accept it as a valid version.
+    let content = "namespace: hda\nname: platform\nversion: \"0.0.2\n";
+    assert_eq!(parse_galaxy_field(content, "version"), None);
+}
+
+#[test]
+fn parse_galaxy_version_rejects_mismatched_quotes() {
+    let content = "version: \"0.0.2'\n";
+    assert_eq!(parse_galaxy_field(content, "version"), None);
+}
+
+#[test]
+fn replace_galaxy_version_returns_none_on_unterminated_quote() {
+    let content = "namespace: hda\nname: platform\nversion: \"0.0.2\n";
+    assert!(replace_galaxy_version(content, &Version::new(0, 0, 3)).is_none());
+}
+
+#[test]
+fn parse_galaxy_version_with_crlf_line_endings() {
+    let content = "namespace: hda\r\nname: platform\r\nversion: \"0.0.2\"\r\n";
+    assert_eq!(
+        parse_galaxy_field(content, "version").as_deref(),
+        Some("0.0.2")
+    );
+}
+
+#[test]
+fn replace_galaxy_version_preserves_crlf_line_endings() {
+    let content = "namespace: hda\r\nname: platform\r\nversion: \"0.0.2\"\r\n";
+    let updated = replace_galaxy_version(content, &Version::new(0, 0, 3)).unwrap();
+    assert_eq!(
+        updated,
+        "namespace: hda\r\nname: platform\r\nversion: \"0.0.3\"\r\n"
+    );
 }

@@ -89,13 +89,34 @@ fn workflows_content(root: &Path) -> String {
 ///
 /// `remote_url` is the normalized origin URL (from `git::remote_url`); GitHub
 /// targets (tag, release, homebrew defaults, ghcr defaults) require it.
+///
+/// `tag_only` is the project type's default (`ProjectType::
+/// publishes_only_git_tag`): when true (e.g. an Ansible collection consumed by
+/// git ref), the git tag is the entire release, so detection stops at the tag
+/// and never adds a GitHub Release or any registry target inferred from
+/// incidental package metadata (a tooling-only `pyproject.toml`, a companion
+/// `Cargo.toml`, etc.).
 pub fn detect_targets(
     root: &Path,
     config: &VerifyConfig,
     remote_url: Option<&str>,
+    tag_only: bool,
 ) -> Result<Vec<Target>> {
     let github = remote_url.and_then(owner_repo);
     let mut targets = Vec::new();
+
+    if tag_only {
+        // The git tag is the entire release. The remote tag check uses
+        // `git ls-remote origin`, which works for any Git host, so the tag
+        // target needs only a remote, not specifically a GitHub one. This
+        // matters: collections are commonly hosted on GitLab / internal Git.
+        // Nothing else is published, so detection stops here.
+        if remote_url.is_some() {
+            targets.push(Target::Tag);
+        }
+        targets.retain(|t| !config.skip.iter().any(|s| s == t.name()));
+        return Ok(targets);
+    }
 
     if github.is_some() {
         targets.push(Target::Tag);

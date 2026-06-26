@@ -26,6 +26,7 @@ fn rust_repo_detects_tag_release_crates() {
         dir.path(),
         &VerifyConfig::default(),
         Some("https://github.com/rvben/mycrate"),
+        false,
     )
     .unwrap();
     assert_eq!(names(&targets), vec!["tag", "release", "crates"]);
@@ -48,6 +49,7 @@ fn publish_false_skips_crates() {
         dir.path(),
         &VerifyConfig::default(),
         Some("https://github.com/rvben/internal"),
+        false,
     )
     .unwrap();
     assert!(!names(&targets).contains(&"crates"));
@@ -61,7 +63,7 @@ fn pyproject_detects_pypi() {
         "pyproject.toml",
         "[project]\nname = \"mypkg\"\nversion = \"1.0.0\"\n",
     );
-    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None).unwrap();
+    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None, false).unwrap();
     assert!(
         targets
             .iter()
@@ -77,7 +79,7 @@ fn private_package_json_skips_npm() {
         "package.json",
         r#"{"name": "internal-app", "version": "1.0.0", "private": true}"#,
     );
-    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None).unwrap();
+    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None, false).unwrap();
     assert!(!names(&targets).contains(&"npm"));
 }
 
@@ -93,6 +95,7 @@ fn workflow_with_ghcr_detects_ghcr_with_default_image() {
         dir.path(),
         &VerifyConfig::default(),
         Some("https://github.com/rvben/MyApp"),
+        false,
     )
     .unwrap();
     assert!(
@@ -114,6 +117,7 @@ fn workflow_with_homebrew_detects_tap_with_defaults() {
         dir.path(),
         &VerifyConfig::default(),
         Some("https://github.com/rvben/mytool"),
+        false,
     )
     .unwrap();
     assert!(targets.iter().any(
@@ -137,6 +141,7 @@ fn config_skip_removes_target() {
         dir.path(),
         &config,
         Some("https://github.com/rvben/mycrate"),
+        false,
     )
     .unwrap();
     assert!(!names(&targets).contains(&"crates"));
@@ -150,8 +155,62 @@ fn no_remote_means_no_tag_release_targets() {
         "Cargo.toml",
         "[package]\nname = \"mycrate\"\nversion = \"1.0.0\"\n",
     );
-    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None).unwrap();
+    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None, false).unwrap();
     assert_eq!(names(&targets), vec!["crates"]);
+}
+
+#[test]
+fn ansible_collection_verifies_tag_only_ignoring_incidental_manifests() {
+    // An Ansible collection is consumed by git ref, so the tag is the entire
+    // release. With tag_only = true, detection must stop at the tag and ignore
+    // the GitHub Release as well as any registry target inferred from incidental
+    // package metadata (a tooling-only pyproject.toml, a companion Cargo.toml).
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "galaxy.yml",
+        "namespace: hda\nname: platform\nversion: \"0.0.2\"\n",
+    );
+    write(
+        dir.path(),
+        "pyproject.toml",
+        "[project]\nname = \"ansible-platform-tools\"\nversion = \"0.0.2\"\n",
+    );
+    write(
+        dir.path(),
+        "Cargo.toml",
+        "[package]\nname = \"helper\"\nversion = \"0.0.2\"\n",
+    );
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://github.com/hda/ansible-platform"),
+        true,
+    )
+    .unwrap();
+    assert_eq!(names(&targets), vec!["tag"]);
+}
+
+#[test]
+fn tag_only_adds_tag_for_non_github_remote() {
+    // Collections are commonly hosted off GitHub (GitLab, internal Git). The
+    // remote tag check uses `git ls-remote origin`, which is host-agnostic, so
+    // tag-only verification must still yield the tag target for such remotes
+    // rather than detecting nothing.
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "galaxy.yml",
+        "namespace: hda\nname: platform\nversion: \"0.0.2\"\n",
+    );
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://gitlab.example.com/group/ansible-roles.git"),
+        true,
+    )
+    .unwrap();
+    assert_eq!(names(&targets), vec!["tag"]);
 }
 
 #[test]
@@ -469,6 +528,7 @@ fn publish_to_private_registry_only_skips_crates() {
         dir.path(),
         &VerifyConfig::default(),
         Some("https://github.com/rvben/internal"),
+        false,
     )
     .unwrap();
     assert!(!names(&targets).contains(&"crates"));
@@ -486,6 +546,7 @@ fn publish_list_naming_crates_io_keeps_crates() {
         dir.path(),
         &VerifyConfig::default(),
         Some("https://github.com/rvben/mycrate"),
+        false,
     )
     .unwrap();
     assert!(names(&targets).contains(&"crates"));
