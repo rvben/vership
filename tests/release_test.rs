@@ -567,3 +567,89 @@ fn ansible_bump_minor_and_major() {
         );
     }
 }
+
+/// Resuming an interrupted bump must stage configured `[[version_files]]`, not
+/// just the manifest. An interrupted run leaves a version_file (here README)
+/// bumped on disk but uncommitted; if resume omits it, the tagged tree carries
+/// the manifest at the new version but README at the old one - an internally
+/// inconsistent release. Project type is irrelevant (the version_files step is
+/// shared), so a Gradle project keeps the test free of a cargo invocation.
+#[test]
+fn resume_stages_configured_version_files() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    init_repo(root);
+
+    fs::write(
+        root.join("settings.gradle.kts"),
+        "rootProject.name = \"demo\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("gradle.properties"), "pluginVersion=0.1.0\n").unwrap();
+    fs::write(root.join("README.md"), "Install demo (rev v0.1.0).\n").unwrap();
+    fs::write(
+        root.join("vership.toml"),
+        "[[version_files]]\nglob = \"README.md\"\nsearch = \"v{prev}\"\nreplace = \"v{version}\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("CHANGELOG.md"), "# Changelog\n\n").unwrap();
+    git(
+        root,
+        &[
+            "add",
+            "settings.gradle.kts",
+            "gradle.properties",
+            "README.md",
+            "vership.toml",
+            "CHANGELOG.md",
+        ],
+    );
+    git(root, &["commit", "-m", "chore: initial"]);
+    git(root, &["tag", "-a", "v0.1.0", "-m", "v0.1.0"]);
+    fs::write(root.join("source.txt"), "change").unwrap();
+    git(root, &["add", "source.txt"]);
+    git(root, &["commit", "-m", "fix: real bug fix since release"]);
+
+    // Simulate an interrupted bump: manifest, the README version_file, and the
+    // changelog are written to disk at the new version but never committed.
+    fs::write(root.join("gradle.properties"), "pluginVersion=0.1.1\n").unwrap();
+    fs::write(root.join("README.md"), "Install demo (rev v0.1.1).\n").unwrap();
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\n## [0.1.1] - 2026-01-01\n\n### Fixed\n\n- real bug fix since release\n",
+    )
+    .unwrap();
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["resume", "--skip-checks", "--no-push"])
+        .assert()
+        .success();
+
+    assert!(tag_exists(root, "v0.1.1"), "tag v0.1.1 must be created");
+
+    // The tagged tree's README (a configured version_file) must carry the
+    // released version, not the prior one.
+    let tagged = Command::new("git")
+        .args(["show", "v0.1.1:README.md"])
+        .current_dir(root)
+        .output()
+        .expect("git runs");
+    let tagged = String::from_utf8_lossy(&tagged.stdout);
+    assert!(
+        tagged.contains("v0.1.1"),
+        "tagged README must be at v0.1.1, got:\n{tagged}"
+    );
+
+    // No bumped version file left stranded in the working tree.
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(root)
+        .output()
+        .expect("git runs");
+    assert!(
+        String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+        "working tree must be clean after resume"
+    );
+}

@@ -303,13 +303,29 @@ fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
                 plan.target
             ));
             // The interrupted run already wrote the version to disk, but the
-            // manifest may still be uncommitted. Re-write it (a no-op when the
-            // value already matches) so it is staged and the release commit and
-            // tag contain the version change instead of the stale prior value.
+            // manifest, lockfile, and configured version files may still be
+            // uncommitted. Re-apply all of them (a no-op when the value already
+            // matches, since on resume on-disk == target) so they are staged and
+            // the release commit and tag carry the version change across every
+            // file, not just the manifest. version_files::apply returns the
+            // touched paths so they reach stage_files below.
             if !opts.dry_run {
                 project.write_version(&root, &plan.target)?;
+                project.sync_lockfile(&root)?;
+                if !config.version_files.is_empty() {
+                    output::print_step("Updating version files");
+                    version_files::apply(
+                        &root,
+                        &config.version_files,
+                        &plan.target.to_string(),
+                        &plan.target.to_string(),
+                    )?
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
             }
-            Vec::new()
         }
         Mutation::None => {
             output::print_step(&format!(
