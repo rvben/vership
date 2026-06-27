@@ -12,7 +12,7 @@ pub enum Target {
     Crates { name: String },
     Pypi { name: String },
     Npm { name: String },
-    Homebrew { tap: String, formula: String },
+    Homebrew { tap: String, formulas: Vec<String> },
     Ghcr { image: String },
 }
 
@@ -28,6 +28,29 @@ impl Target {
             Target::Ghcr { .. } => "ghcr",
         }
     }
+}
+
+/// Candidate Homebrew formula names to probe, in priority order. A formula is
+/// conventionally named after the installed binary (the crate name for a Rust
+/// tool), which is not always the repository name — e.g. the `clispec-cli` repo
+/// ships a `clispec` formula. An explicit `formula` config wins outright;
+/// otherwise try the crate name then the repo name, deduplicated, and use
+/// whichever formula actually exists in the tap.
+fn formula_candidates(
+    config_formula: Option<&str>,
+    crate_name: Option<&str>,
+    repo: &str,
+) -> Vec<String> {
+    if let Some(f) = config_formula {
+        return vec![f.to_string()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    for name in [crate_name, Some(repo)].into_iter().flatten() {
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
 }
 
 #[derive(Deserialize)]
@@ -124,11 +147,15 @@ pub fn detect_targets(
     }
 
     let cargo_path = root.join("Cargo.toml");
+    // Captured for the Homebrew formula default: the formula is named after the
+    // installed binary (the crate name), which can differ from the repo name.
+    let mut crate_name: Option<String> = None;
     if cargo_path.exists() {
         let content = std::fs::read_to_string(&cargo_path)?;
         let manifest: CargoManifest = toml::from_str(&content)
             .map_err(|e| Error::Config(format!("parse Cargo.toml: {e}")))?;
         if let Some(package) = manifest.package {
+            crate_name = package.name.clone();
             // `publish = false` opts out entirely; a registry list restricts
             // publication to the named registries, so crates.io is a target
             // only when the list names it ("crates-io").
@@ -176,7 +203,11 @@ pub fn detect_targets(
                     .tap
                     .clone()
                     .unwrap_or_else(|| format!("{owner}/homebrew-tap")),
-                formula: config.formula.clone().unwrap_or_else(|| repo.clone()),
+                formulas: formula_candidates(
+                    config.formula.as_deref(),
+                    crate_name.as_deref(),
+                    repo,
+                ),
             });
         }
         if workflows.contains("ghcr.io") || config.image.is_some() {
@@ -228,4 +259,35 @@ pub fn filter_targets(
         targets.retain(|t| !drop.iter().any(|k| k == t.name()));
     }
     Ok(targets)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formula_candidates_prefers_crate_then_repo() {
+        // repo != crate (the clispec-cli case): probe the crate name first, then
+        // the repo name, so a `clispec` formula in a `clispec-cli` repo is found.
+        let c = formula_candidates(None, Some("clispec"), "clispec-cli");
+        assert_eq!(c, vec!["clispec".to_string(), "clispec-cli".to_string()]);
+    }
+
+    #[test]
+    fn formula_candidates_dedupes_when_crate_equals_repo() {
+        let c = formula_candidates(None, Some("foo"), "foo");
+        assert_eq!(c, vec!["foo".to_string()]);
+    }
+
+    #[test]
+    fn formula_candidates_honors_explicit_config() {
+        let c = formula_candidates(Some("custom"), Some("foo"), "bar");
+        assert_eq!(c, vec!["custom".to_string()]);
+    }
+
+    #[test]
+    fn formula_candidates_falls_back_to_repo_without_crate() {
+        let c = formula_candidates(None, None, "bar");
+        assert_eq!(c, vec!["bar".to_string()]);
+    }
 }

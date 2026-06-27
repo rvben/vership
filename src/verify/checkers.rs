@@ -74,34 +74,47 @@ pub fn homebrew(
     agent: &ureq::Agent,
     raw_base: &str,
     tap: &str,
-    formula: &str,
+    formulas: &[String],
     version: &str,
 ) -> CheckResult {
-    let url = format!("{raw_base}/{tap}/HEAD/Formula/{formula}.rb");
-    let body = match agent.get(&url).set("User-Agent", USER_AGENT).call() {
-        Ok(resp) => match resp.into_string() {
-            Ok(body) => body,
-            Err(e) => return CheckResult::Error(format!("read formula: {e}")),
-        },
-        Err(ureq::Error::Status(404, _)) => return CheckResult::NotFound,
-        Err(ureq::Error::Status(code, _)) => {
-            return CheckResult::Error(format!("HTTP {code}"));
-        }
-        Err(e) => return CheckResult::Error(e.to_string()),
-    };
     // Digit boundaries so 1.2.3 never matches inside v1.2.30 or 11.2.3.
     let exact = regex::Regex::new(&format!(
         r"(?:^|[^\d]){}(?:[^\d]|$)",
         regex::escape(version)
     ))
     .expect("valid regex");
-    if exact.is_match(&body) {
-        return CheckResult::Found(version.to_string());
+    let any_version =
+        regex::Regex::new(r#"(?:version\s+"|/v)(\d+\.\d+(?:\.\d+)*)"#).expect("valid regex");
+
+    // The formula is conventionally named after the binary, which may differ
+    // from the repo name. Probe each candidate; an exact match on any wins, a
+    // stale version on the first existing formula is reported, and only if none
+    // of the candidates exist do we report NotFound.
+    let mut found_old: Option<String> = None;
+    for formula in formulas {
+        let url = format!("{raw_base}/{tap}/HEAD/Formula/{formula}.rb");
+        let body = match agent.get(&url).set("User-Agent", USER_AGENT).call() {
+            Ok(resp) => match resp.into_string() {
+                Ok(body) => body,
+                Err(e) => return CheckResult::Error(format!("read formula: {e}")),
+            },
+            Err(ureq::Error::Status(404, _)) => continue,
+            Err(ureq::Error::Status(code, _)) => {
+                return CheckResult::Error(format!("HTTP {code}"));
+            }
+            Err(e) => return CheckResult::Error(e.to_string()),
+        };
+        if exact.is_match(&body) {
+            return CheckResult::Found(version.to_string());
+        }
+        if found_old.is_none()
+            && let Some(captures) = any_version.captures(&body)
+        {
+            found_old = Some(captures[1].to_string());
+        }
     }
-    // Look for whatever version the formula does carry.
-    let re = regex::Regex::new(r#"(?:version\s+"|/v)(\d+\.\d+(?:\.\d+)*)"#).expect("valid regex");
-    match re.captures(&body) {
-        Some(captures) => CheckResult::FoundOld(captures[1].to_string()),
+    match found_old {
+        Some(v) => CheckResult::FoundOld(v),
         None => CheckResult::NotFound,
     }
 }

@@ -56,8 +56,8 @@ pub fn run(
                 targets::Target::Npm { name } => {
                     checkers::npm(&agent, checkers::NPM, name, &version)
                 }
-                targets::Target::Homebrew { tap, formula } => {
-                    checkers::homebrew(&agent, checkers::RAW_GITHUB, tap, formula, &version)
+                targets::Target::Homebrew { tap, formulas } => {
+                    checkers::homebrew(&agent, checkers::RAW_GITHUB, tap, formulas, &version)
                 }
                 targets::Target::Ghcr { image } => {
                     let cred = checkers::resolve_ghcr_credential();

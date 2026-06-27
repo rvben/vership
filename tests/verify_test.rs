@@ -121,7 +121,7 @@ fn workflow_with_homebrew_detects_tap_with_defaults() {
     )
     .unwrap();
     assert!(targets.iter().any(
-        |t| matches!(t, Target::Homebrew { tap, formula } if tap == "rvben/homebrew-tap" && formula == "mytool")
+        |t| matches!(t, Target::Homebrew { tap, formulas } if tap == "rvben/homebrew-tap" && formulas.contains(&"mytool".to_string()))
     ));
 }
 
@@ -343,7 +343,7 @@ fn homebrew_found_when_formula_contains_version() {
         &agent(),
         &server.base_url(),
         "rvben/homebrew-tap",
-        "mytool",
+        &["mytool".to_string()],
         "1.2.3",
     );
     assert_eq!(result, CheckResult::Found("1.2.3".to_string()));
@@ -362,10 +362,38 @@ fn homebrew_old_version_is_found_old() {
         &agent(),
         &server.base_url(),
         "rvben/homebrew-tap",
-        "mytool",
+        &["mytool".to_string()],
         "1.2.3",
     );
     assert_eq!(result, CheckResult::FoundOld("1.2.2".to_string()));
+}
+
+#[test]
+fn homebrew_found_under_second_candidate_formula_name() {
+    // The clispec-cli case: the repo is `clispec-cli` but the formula is
+    // `clispec.rb`. The repo-named formula 404s; the crate-named one exists.
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/rvben/homebrew-tap/HEAD/Formula/clispec-cli.rb");
+        then.status(404);
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/rvben/homebrew-tap/HEAD/Formula/clispec.rb");
+        then.status(200)
+            .body("  version \"0.2.6\"\n  url \"...v0.2.6/clispec.tar.gz\"\n");
+    });
+    // Probe the repo name first (404) so the 404 -> continue fallback is what
+    // actually finds the crate-named formula.
+    let result = checkers::homebrew(
+        &agent(),
+        &server.base_url(),
+        "rvben/homebrew-tap",
+        &["clispec-cli".to_string(), "clispec".to_string()],
+        "0.2.6",
+    );
+    assert_eq!(result, CheckResult::Found("0.2.6".to_string()));
 }
 
 #[test]
@@ -380,7 +408,7 @@ fn homebrew_missing_formula_is_not_found() {
         &agent(),
         &server.base_url(),
         "rvben/homebrew-tap",
-        "mytool",
+        &["mytool".to_string()],
         "1.2.3",
     );
     assert_eq!(result, CheckResult::NotFound);
@@ -566,7 +594,7 @@ fn homebrew_version_substring_of_newer_version_is_found_old() {
         &agent(),
         &server.base_url(),
         "rvben/homebrew-tap",
-        "mytool",
+        &["mytool".to_string()],
         "1.2.3",
     );
     assert_eq!(result, CheckResult::FoundOld("1.2.30".to_string()));
