@@ -26,6 +26,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.10](https://github.com/rvben/vership/compare/v0.5.9...v0.5.10) - 2026-06-28
+
+### Fixed
+
+- **verify**: resolve Homebrew formula by crate name, not just repo name ([a72c720](https://github.com/rvben/vership/commit/a72c720299d528fe32230efef839bc6c87a42ce0))
+- **release**: stage configured version_files when resuming an interrupted bump ([5339e9b](https://github.com/rvben/vership/commit/5339e9b83e205e3a1473697ab6002ae6c9a5ea12))
+
 ## [0.5.9](https://github.com/rvben/vership/compare/v0.5.8...v0.5.9) - 2026-06-26
 
 ### Added
