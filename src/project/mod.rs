@@ -7,6 +7,7 @@ pub mod node;
 pub mod python;
 pub mod rust;
 pub mod rust_maturin;
+pub mod workspace_deps;
 
 use std::path::{Path, PathBuf};
 
