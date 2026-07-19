@@ -27,6 +27,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
 
+
+## [0.5.11](https://github.com/rvben/vership/compare/v0.5.10...v0.5.11) - 2026-07-19
+
+### Fixed
+
+- rewrite workspace dep versions for maturin projects too ([b850777](https://github.com/rvben/vership/commit/b850777717e88aa06f0fd1a6fcccc6c0cc357d73))
+- honor [workspace].exclude when rewriting workspace dep versions ([9351f01](https://github.com/rvben/vership/commit/9351f019591ac7b2c6da5ba97e0a97b88d38feb2))
+- rewrite intra-workspace dependency versions on bump ([bf5f0fb](https://github.com/rvben/vership/commit/bf5f0fb6a18cf71f3b737c4439dedad1b20bb148))
+
 ## [0.5.10](https://github.com/rvben/vership/compare/v0.5.9...v0.5.10) - 2026-06-28
 
 ### Fixed
