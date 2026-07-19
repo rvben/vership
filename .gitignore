@@ -1,1 +1,11 @@
 /target
+
+# Agent config and internal design docs and scratch: never committed or published
+/.claude/
+/.superpowers/
+/docs/superpowers/
+/.vership-fix-report.md
+/.vership-fix2-report.md
+
+# Stray uv (Python) lockfile at the Rust crate root: not source, never published
+/uv.lock
