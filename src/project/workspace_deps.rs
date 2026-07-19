@@ -40,31 +40,33 @@ pub fn update_intra_workspace_dep_versions(
     let member_dirs = discover_member_dirs(root, workspace)?;
 
     let mut member_names: BTreeSet<String> = BTreeSet::new();
-    let mut manifest_paths: Vec<PathBuf> = Vec::new();
+    let mut manifests: Vec<(PathBuf, DocumentMut)> = Vec::new();
 
     for dir in &member_dirs {
-        let manifest = dir.join("Cargo.toml");
-        if let Some(name) = read_package_name(&manifest)? {
+        let manifest_path = dir.join("Cargo.toml");
+        let doc = read_document(&manifest_path)?;
+        if let Some(name) = package_name(&doc) {
             member_names.insert(name);
         }
-        manifest_paths.push(manifest);
+        manifests.push((manifest_path, doc));
     }
 
     // The root manifest may itself carry a [package] table (a workspace root
-    // that is also a crate), and may carry [workspace.dependencies].
-    if let Some(name) = read_package_name(&root_manifest_path)? {
+    // that is also a crate), and may carry [workspace.dependencies]. Reuse
+    // the document already parsed above instead of reading it again.
+    if let Some(name) = package_name(&root_doc) {
         member_names.insert(name);
     }
-    manifest_paths.push(root_manifest_path.clone());
+    manifests.push((root_manifest_path, root_doc));
 
     let mut changed: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
 
-    for manifest_path in manifest_paths {
+    for (manifest_path, doc) in manifests {
         if !seen.insert(manifest_path.clone()) {
             continue;
         }
-        if update_manifest_file(&manifest_path, &member_names, new_version)? {
+        if update_manifest_file(&manifest_path, doc, &member_names, new_version)? {
             let rel = manifest_path
                 .strip_prefix(root)
                 .unwrap_or(&manifest_path)
@@ -88,9 +90,14 @@ fn read_document(manifest_path: &Path) -> Result<DocumentMut> {
 
 /// Expand `[workspace].members` glob patterns (relative to `root`) into
 /// existing member directories. A literal entry like `"core"` resolves to
-/// that directory; a pattern like `"crates/*"` expands normally.
+/// that directory; a pattern like `"crates/*"` expands normally. Directories
+/// matched by `[workspace].exclude` (or nested under an excluded directory)
+/// are dropped: `exclude` means "not a workspace member", so a crate listed
+/// there keeps its own independent version even when a real member depends
+/// on it by path.
 fn discover_member_dirs(root: &Path, workspace: &toml_edit::Table) -> Result<Vec<PathBuf>> {
     let mut dirs = Vec::new();
+    let excluded_dirs = read_excluded_dirs(root, workspace);
 
     let Some(members) = workspace.get("members").and_then(Item::as_array) else {
         return Ok(dirs);
@@ -107,7 +114,7 @@ fn discover_member_dirs(root: &Path, workspace: &toml_edit::Table) -> Result<Vec
         for path_result in paths {
             let path =
                 path_result.map_err(|e| Error::Other(format!("workspace member glob: {e}")))?;
-            if path.is_dir() {
+            if path.is_dir() && !is_excluded(&path, &excluded_dirs) {
                 dirs.push(path);
             }
         }
@@ -116,27 +123,70 @@ fn discover_member_dirs(root: &Path, workspace: &toml_edit::Table) -> Result<Vec
     Ok(dirs)
 }
 
-fn read_package_name(manifest_path: &Path) -> Result<Option<String>> {
-    if !manifest_path.exists() {
-        return Ok(None);
+/// Read `[workspace].exclude` (paths relative to `root`) into normalized
+/// absolute paths for prefix comparison against discovered member dirs.
+fn read_excluded_dirs(root: &Path, workspace: &toml_edit::Table) -> Vec<PathBuf> {
+    let Some(exclude) = workspace.get("exclude").and_then(Item::as_array) else {
+        return Vec::new();
+    };
+
+    exclude
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|pattern| normalize_path(&root.join(pattern)))
+        .collect()
+}
+
+/// Whether `path` equals, or is nested under, any of `excluded_dirs`.
+/// Compares normalized absolute paths so `exclude = ["crates/excluded"]`
+/// also excludes anything below `crates/excluded/`.
+fn is_excluded(path: &Path, excluded_dirs: &[PathBuf]) -> bool {
+    let normalized = normalize_path(path);
+    excluded_dirs
+        .iter()
+        .any(|excluded| normalized.starts_with(excluded))
+}
+
+/// Normalize a path for comparison: canonicalize when the path exists
+/// (resolving symlinks so paths built from the same root compare equal even
+/// through a symlinked tmp dir), falling back to lexical `.`/`..` resolution
+/// for a path that doesn't exist on disk (an `exclude` entry need not exist).
+fn normalize_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| lexically_normalize(path))
+}
+
+fn lexically_normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                result.pop();
+            }
+            Component::CurDir => {}
+            other => result.push(other.as_os_str()),
+        }
     }
-    let doc = read_document(manifest_path)?;
-    Ok(doc
-        .get("package")
+    result
+}
+
+fn package_name(doc: &DocumentMut) -> Option<String> {
+    doc.get("package")
         .and_then(Item::as_table)
         .and_then(|t| t.get("name"))
         .and_then(Item::as_str)
-        .map(str::to_string))
+        .map(str::to_string)
 }
 
-/// Scan and rewrite every dependency table in a single manifest. Returns
-/// whether the manifest was actually changed.
+/// Scan and rewrite every dependency table in a single already-parsed
+/// manifest document. Returns whether the manifest was actually changed.
 fn update_manifest_file(
     manifest_path: &Path,
+    mut doc: DocumentMut,
     member_names: &BTreeSet<String>,
     new_version: &semver::Version,
 ) -> Result<bool> {
-    let mut doc = read_document(manifest_path)?;
     let mut changed = false;
 
     for key in DEP_TABLE_KEYS {

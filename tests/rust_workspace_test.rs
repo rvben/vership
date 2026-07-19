@@ -338,6 +338,86 @@ serde = "1"
     );
 }
 
+/// A directory matched by a `[workspace].members` glob but listed in
+/// `[workspace].exclude` is not a workspace member: its name must not enter
+/// the member-name set, so a real member's path dependency on it (which
+/// carries the excluded crate's own independent version) is left untouched,
+/// while a dependency on an actual member in the same manifest is rewritten.
+#[test]
+fn workspace_bump_ignores_excluded_member() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "Cargo.toml",
+        r#"[workspace]
+members = ["crates/*"]
+exclude = ["crates/excluded"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+"#,
+    );
+    write(
+        dir.path(),
+        "crates/a/Cargo.toml",
+        r#"[package]
+name = "acme-a"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+acme-b = { path = "../b", version = "0.1.0" }
+acme-excluded = { path = "../excluded", version = "9.9.9" }
+"#,
+    );
+    write(
+        dir.path(),
+        "crates/b/Cargo.toml",
+        r#"[package]
+name = "acme-b"
+version.workspace = true
+edition = "2021"
+"#,
+    );
+    write(
+        dir.path(),
+        "crates/excluded/Cargo.toml",
+        r#"[package]
+name = "acme-excluded"
+version = "9.9.9"
+edition = "2021"
+"#,
+    );
+
+    let project = RustProject::new();
+    project
+        .write_version(dir.path(), &Version::new(0, 2, 0))
+        .unwrap();
+
+    let a_content = read(dir.path(), "crates/a/Cargo.toml");
+    assert!(
+        a_content.contains(r#"acme-b = { path = "../b", version = "0.2.0" }"#),
+        "real intra-workspace dependency was not rewritten:\n{a_content}"
+    );
+    assert!(
+        a_content.contains(r#"acme-excluded = { path = "../excluded", version = "9.9.9" }"#),
+        "dependency on an excluded crate was incorrectly rewritten:\n{a_content}"
+    );
+
+    let excluded_content = read(dir.path(), "crates/excluded/Cargo.toml");
+    assert!(
+        excluded_content.contains(r#"version = "9.9.9""#),
+        "excluded crate's own manifest was modified:\n{excluded_content}"
+    );
+
+    let files = project.modified_files();
+    assert!(
+        !files.contains(&PathBuf::from("crates").join("excluded").join("Cargo.toml")),
+        "excluded crate's manifest incorrectly reported as modified: {files:?}"
+    );
+}
+
 /// An external registry dependency that happens to share its version string
 /// with the pre-bump workspace version must not be touched: it is not a
 /// workspace member, matching is by name, never by coincidental version.
