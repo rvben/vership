@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use crate::version;
 
 use super::cargo_helpers;
+use super::workspace_deps;
 
 pub struct RustMaturinProject {
     modified_files: RefCell<Vec<PathBuf>>,
@@ -49,6 +50,17 @@ impl ProjectType for RustMaturinProject {
         std::fs::write(&cargo_path, updated)
             .map_err(|e| Error::Other(format!("write Cargo.toml: {e}")))?;
         modified.push(PathBuf::from("Cargo.toml"));
+
+        // Rewrite `version` requirements on intra-workspace path dependencies
+        // (e.g. `sib = { path = "../sib", version = "X" }`) so a sibling
+        // member stays resolvable after this bump. No-op for a single-crate
+        // project (no [workspace] table).
+        for changed in workspace_deps::update_intra_workspace_dep_versions(root, new_version)? {
+            if !modified.contains(&changed) {
+                modified.push(changed);
+            }
+        }
+
         modified.push(PathBuf::from("Cargo.lock"));
 
         // Update pyproject.toml version only if it has a static version field
