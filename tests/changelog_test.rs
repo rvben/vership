@@ -600,3 +600,120 @@ fn integrate_promotion_keeps_single_unreleased_heading() {
     assert!(result.content.contains("## [2.0.0] - 2026-05-22"));
     assert!(result.promoted, "curated change was promoted");
 }
+
+// --- integrate_changelog: blank-line hygiene across repeated releases ---
+
+const PREAMBLE: &str = "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n";
+
+/// Longest run of consecutive blank lines anywhere in the document.
+fn longest_blank_run(content: &str) -> usize {
+    let mut longest = 0;
+    let mut run = 0;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    longest
+}
+
+fn release_section(patch: u32) -> String {
+    format!(
+        "## [0.1.{patch}](https://example.com/compare/v0.1.{}...v0.1.{patch}) - 2026-06-0{patch}\n\n### Fixed\n\n- fix {patch}\n",
+        patch - 1
+    )
+}
+
+#[test]
+fn repeated_prepends_do_not_accumulate_blank_lines() {
+    let mut content = format!("{PREAMBLE}\n{}", release_section(1));
+    for patch in 2..=5 {
+        content = integrate_changelog(Some(&content), &release_section(patch)).content;
+    }
+
+    assert_eq!(
+        longest_blank_run(&content),
+        1,
+        "each release must be separated by exactly one blank line, got:\n{content}"
+    );
+    let newest = content.find("## [0.1.5]").unwrap();
+    let oldest = content.find("## [0.1.1]").unwrap();
+    assert!(newest < oldest, "newest release must sit on top");
+}
+
+#[test]
+fn repeated_promotions_do_not_accumulate_blank_lines() {
+    let mut content = format!("{PREAMBLE}\n## [Unreleased]\n\n{}", release_section(1));
+    for patch in 2..=5 {
+        content = integrate_changelog(Some(&content), &release_section(patch)).content;
+    }
+
+    assert_eq!(
+        longest_blank_run(&content),
+        1,
+        "each release must be separated by exactly one blank line, got:\n{content}"
+    );
+    assert_eq!(content.matches("## [Unreleased]").count(), 1);
+}
+
+#[test]
+fn promoting_curated_content_leaves_one_blank_line_before_the_prior_release() {
+    let existing = format!(
+        "{PREAMBLE}\n## [Unreleased]\n\n### Added\n\n- curated\n\n{}",
+        release_section(1)
+    );
+    let result = integrate_changelog(Some(&existing), &release_section(2));
+
+    assert!(result.promoted);
+    assert!(
+        result.content.contains("- curated\n\n## [0.1.1]"),
+        "curated body must be one blank line above the prior release, got:\n{}",
+        result.content
+    );
+}
+
+#[test]
+fn promoted_heading_is_separated_from_a_tight_curated_body() {
+    let existing = "# Changelog\n\n## [Unreleased]\n### Added\n\n- curated\n";
+    let result = integrate_changelog(Some(existing), &release_section(1));
+
+    assert!(
+        result.content.contains("- 2026-06-01\n\n### Added"),
+        "a body written tight against [Unreleased] still needs a blank line under the promoted heading, got:\n{}",
+        result.content
+    );
+}
+
+#[test]
+fn promotion_keeps_the_indentation_of_a_curated_code_block() {
+    let existing = "# Changelog\n\n## [Unreleased]\n\n    let x = 1;\n\n## [0.1.0] - 2026-01-01\n\n### Added\n\n- initial\n";
+    let result = integrate_changelog(Some(existing), &release_section(1));
+
+    assert!(
+        result.content.contains("\n    let x = 1;\n"),
+        "an indented code block must survive promotion as a code block, got:\n{}",
+        result.content
+    );
+}
+
+#[test]
+fn prepend_puts_the_new_release_above_a_changelog_that_opens_with_a_heading() {
+    let existing = "## [0.1.1] - 2026-06-01\n\n### Fixed\n\n- fix 1\n";
+    let result = integrate_changelog(Some(existing), &release_section(2));
+
+    let newest = result.content.find("## [0.1.2]").unwrap();
+    let oldest = result.content.find("## [0.1.1]").unwrap();
+    assert!(
+        newest < oldest,
+        "a changelog with no preamble still gets the new release on top, got:\n{}",
+        result.content
+    );
+    assert!(
+        !result.content.starts_with('\n'),
+        "no leading blank line when there is no preamble, got:\n{}",
+        result.content
+    );
+}

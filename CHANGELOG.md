@@ -4,30 +4,6 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 ## [0.5.11](https://github.com/rvben/vership/compare/v0.5.10...v0.5.11) - 2026-07-19
 
 ### Fixed

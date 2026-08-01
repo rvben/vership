@@ -202,19 +202,55 @@ pub fn prepend_to_changelog(existing: Option<&str>, new_section: &str) -> String
     let header = "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/).\n";
 
     match existing {
-        Some(content) => {
-            // Find the first ## heading and insert before it
-            if let Some(pos) = content.find("\n## ") {
-                let (before, after) = content.split_at(pos + 1);
-                format!("{before}\n{new_section}\n{after}")
-            } else {
-                // No existing versions, append after header
-                format!("{content}\n{new_section}")
-            }
+        Some(content) => match split_at_first_release_heading(content) {
+            Some((preamble, releases)) => join_blocks(&[preamble, new_section, releases]),
+            // No existing versions, append after the preamble.
+            None => join_blocks(&[content, new_section]),
+        },
+        None => join_blocks(&[header, new_section]),
+    }
+}
+
+/// Split a changelog at its first `## ` heading, giving the preamble before it
+/// and the releases from it onwards. The preamble is empty when the document
+/// opens with a heading. Returns `None` for a document with no `## ` heading.
+fn split_at_first_release_heading(content: &str) -> Option<(&str, &str)> {
+    let pos = if content.starts_with("## ") {
+        0
+    } else {
+        content.find("\n## ")? + 1
+    };
+    Some(content.split_at(pos))
+}
+
+/// Join document blocks with exactly one blank line between them, ending in a
+/// single newline. Blank-only blocks are dropped, so a run of blank lines never
+/// grows at a join and a release never lands against an empty preamble.
+fn join_blocks(blocks: &[&str]) -> String {
+    let kept: Vec<&str> = blocks
+        .iter()
+        .map(|block| trim_blank_lines(block))
+        .filter(|block| !block.is_empty())
+        .collect();
+    format!("{}\n", kept.join("\n\n"))
+}
+
+/// Drop whole blank lines from both ends of a block. The indentation of the
+/// first content line survives, so a section opening with an indented code
+/// block stays a code block.
+fn trim_blank_lines(block: &str) -> &str {
+    let mut bounds: Option<(usize, usize)> = None;
+    let mut offset = 0;
+    for line in block.split_inclusive('\n') {
+        if !line.trim().is_empty() {
+            let content_end = offset + line.trim_end_matches(['\n', '\r']).len();
+            bounds = Some((bounds.map_or(offset, |(start, _)| start), content_end));
         }
-        None => {
-            format!("{header}\n{new_section}")
-        }
+        offset += line.len();
+    }
+    match bounds {
+        Some((start, end)) => &block[start..end],
+        None => "",
     }
 }
 
@@ -274,18 +310,13 @@ pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> Changel
     let curated = !unreleased_body.trim().is_empty();
     let promoted_section = if curated {
         // Curated content wins; reuse only the generated heading.
-        format!("{new_header}{}", trim_trailing_blank_lines(unreleased_body))
+        join_blocks(&[new_header, unreleased_body])
     } else {
         // Nothing curated: fill the promoted slot with the generated section.
-        format!("{}\n\n", new_section.trim_end())
+        new_section.to_string()
     };
 
-    let rest = rest.trim_start_matches('\n');
-    let mut result = format!("{preamble}## [Unreleased]\n\n{promoted_section}");
-    if !rest.is_empty() {
-        result.push_str("\n\n");
-        result.push_str(rest);
-    }
+    let result = join_blocks(&[preamble, "## [Unreleased]", &promoted_section, rest]);
     // vership emits self-contained inline-linked version headers, so any bottom
     // `[Unreleased]:` / `[x.y.z]:` link-reference definitions are redundant and
     // drift out of date on every promotion. Strip them, leaving a clean trailing
@@ -314,12 +345,6 @@ fn strip_version_link_refs(content: &str) -> String {
         .filter(|line| !ref_re.is_match(line))
         .collect();
     format!("{}\n", kept.join("\n").trim_end())
-}
-
-/// Trim trailing blank lines but keep a single trailing newline, so a curated
-/// `[Unreleased]` body slots cleanly before the next heading.
-fn trim_trailing_blank_lines(body: &str) -> String {
-    format!("{}\n", body.trim_end())
 }
 
 /// Extract the changelog section for `version` from a full document: from its
