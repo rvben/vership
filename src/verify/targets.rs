@@ -36,7 +36,7 @@ impl Target {
 /// ships a `clispec` formula. An explicit `formula` config wins outright;
 /// otherwise try the crate name then the repo name, deduplicated, and use
 /// whichever formula actually exists in the tap.
-fn formula_candidates(
+pub(crate) fn formula_candidates(
     config_formula: Option<&str>,
     crate_name: Option<&str>,
     repo: &str,
@@ -78,6 +78,71 @@ struct PyprojectProject {
 struct PackageJson {
     name: Option<String>,
     private: Option<bool>,
+}
+
+/// A Cargo package's identity: its name, and whether it may reach crates.io.
+pub(crate) struct CargoIdentity {
+    pub name: String,
+    pub publishable: bool,
+}
+
+/// Read the package name from Cargo.toml. `publish = false` opts out of
+/// publication entirely; a registry list restricts publication to the named
+/// registries, so crates.io is in play only when the list names it
+/// ("crates-io"). The name is returned either way: a crate that never reaches
+/// crates.io can still be installed locally from its path.
+pub(crate) fn cargo_identity(root: &Path) -> Result<Option<CargoIdentity>> {
+    let path = root.join("Cargo.toml");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let manifest: CargoManifest =
+        toml::from_str(&content).map_err(|e| Error::Config(format!("parse Cargo.toml: {e}")))?;
+    let Some(package) = manifest.package else {
+        return Ok(None);
+    };
+    let Some(name) = package.name else {
+        return Ok(None);
+    };
+    let publishable = match &package.publish {
+        None => true,
+        Some(toml::Value::Boolean(b)) => *b,
+        Some(toml::Value::Array(registries)) => {
+            registries.iter().any(|r| r.as_str() == Some("crates-io"))
+        }
+        Some(_) => true,
+    };
+    Ok(Some(CargoIdentity { name, publishable }))
+}
+
+/// Read the distribution name from pyproject.toml.
+pub(crate) fn pypi_project_name(root: &Path) -> Result<Option<String>> {
+    let path = root.join("pyproject.toml");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let pyproject: Pyproject = toml::from_str(&content)
+        .map_err(|e| Error::Config(format!("parse pyproject.toml: {e}")))?;
+    Ok(pyproject.project.and_then(|p| p.name))
+}
+
+/// Read the package name from package.json. A private package is never
+/// published and never installed globally from a registry, so it reads as no
+/// name at all.
+pub(crate) fn npm_package_name(root: &Path) -> Result<Option<String>> {
+    let path = root.join("package.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let package: PackageJson = serde_json::from_str(&content)
+        .map_err(|e| Error::Config(format!("parse package.json: {e}")))?;
+    if package.private == Some(true) {
+        return Ok(None);
+    }
+    Ok(package.name)
 }
 
 /// Extract "owner/repo" from a normalized https remote URL.
@@ -146,53 +211,23 @@ pub fn detect_targets(
         targets.push(Target::Release);
     }
 
-    let cargo_path = root.join("Cargo.toml");
-    // Captured for the Homebrew formula default: the formula is named after the
-    // installed binary (the crate name), which can differ from the repo name.
-    let mut crate_name: Option<String> = None;
-    if cargo_path.exists() {
-        let content = std::fs::read_to_string(&cargo_path)?;
-        let manifest: CargoManifest = toml::from_str(&content)
-            .map_err(|e| Error::Config(format!("parse Cargo.toml: {e}")))?;
-        if let Some(package) = manifest.package {
-            crate_name = package.name.clone();
-            // `publish = false` opts out entirely; a registry list restricts
-            // publication to the named registries, so crates.io is a target
-            // only when the list names it ("crates-io").
-            let publishable = match &package.publish {
-                None => true,
-                Some(toml::Value::Boolean(b)) => *b,
-                Some(toml::Value::Array(registries)) => {
-                    registries.iter().any(|r| r.as_str() == Some("crates-io"))
-                }
-                Some(_) => true,
-            };
-            if publishable && let Some(name) = package.name {
-                targets.push(Target::Crates { name });
-            }
-        }
+    // The crate name is captured even when the crate is unpublishable: it is the
+    // Homebrew formula default, since the formula is named after the installed
+    // binary rather than the repo.
+    let cargo = cargo_identity(root)?;
+    let crate_name = cargo.as_ref().map(|c| c.name.clone());
+    if let Some(cargo) = cargo
+        && cargo.publishable
+    {
+        targets.push(Target::Crates { name: cargo.name });
     }
 
-    let pyproject_path = root.join("pyproject.toml");
-    if pyproject_path.exists() {
-        let content = std::fs::read_to_string(&pyproject_path)?;
-        let pyproject: Pyproject = toml::from_str(&content)
-            .map_err(|e| Error::Config(format!("parse pyproject.toml: {e}")))?;
-        if let Some(name) = pyproject.project.and_then(|p| p.name) {
-            targets.push(Target::Pypi { name });
-        }
+    if let Some(name) = pypi_project_name(root)? {
+        targets.push(Target::Pypi { name });
     }
 
-    let package_json_path = root.join("package.json");
-    if package_json_path.exists() {
-        let content = std::fs::read_to_string(&package_json_path)?;
-        let package: PackageJson = serde_json::from_str(&content)
-            .map_err(|e| Error::Config(format!("parse package.json: {e}")))?;
-        if package.private != Some(true)
-            && let Some(name) = package.name
-        {
-            targets.push(Target::Npm { name });
-        }
+    if let Some(name) = npm_package_name(root)? {
+        targets.push(Target::Npm { name });
     }
 
     let workflows = workflows_content(root);

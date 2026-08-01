@@ -11,6 +11,7 @@ pub mod planning;
 pub mod project;
 pub mod release;
 pub mod schema;
+pub mod update_local;
 pub mod verify;
 pub mod version;
 pub mod version_files;

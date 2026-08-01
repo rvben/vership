@@ -106,6 +106,21 @@ pub enum Command {
         #[arg(long, value_name = "LIST")]
         skip: Option<String>,
     },
+    /// Update this machine's installs of the released package to a version,
+    /// and report which copy `$PATH` actually reaches.
+    UpdateLocal {
+        /// Version to install (defaults to the on-disk version)
+        version: Option<String>,
+        /// Comma-separated subset of package managers to update
+        #[arg(long, value_name = "LIST")]
+        managers: Option<String>,
+        /// Comma-separated package managers to skip
+        #[arg(long, value_name = "LIST")]
+        skip: Option<String>,
+        /// Print the install commands without running them
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Configuration management
     #[command(subcommand)]
     Config(ConfigCommand),

@@ -87,7 +87,11 @@ pub fn run(
 
 /// Explicit version arg (with or without leading v) wins; otherwise the
 /// on-disk project version; otherwise the latest semver tag.
-fn resolve_version(root: &Path, config: &Config, explicit: Option<&str>) -> Result<String> {
+pub(crate) fn resolve_version(
+    root: &Path,
+    config: &Config,
+    explicit: Option<&str>,
+) -> Result<String> {
     if let Some(v) = explicit {
         return Ok(v.trim_start_matches('v').to_string());
     }

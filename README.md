@@ -102,6 +102,9 @@ vership preflight                  Run all pre-flight checks
 vership status                     Show version, project type, unreleased commits
 vership verify [<version>]         Verify a release is live on all publish targets
   --targets <list> / --skip <list>         Filter targets
+vership update-local [<version>]   Update this machine's installs to a version
+  --managers <list> / --skip <list>        Filter package managers
+  --dry-run                        Print the install commands without running them
 vership config init                Create vership.toml with defaults
 vership schema                     JSON schema for agent integration
 vership completions <shell>        Generate shell completions
@@ -155,6 +158,33 @@ Exit codes: 0 when every target passes; 8 (`unpublished`, retryable) when anythi
 ```sh
 tarry cmd --timeout 20m -- vership verify
 ```
+
+## Local Install Update
+
+Releasing a tool you use yourself leaves your own machine on the old version, and often on several old versions at once: the same executable can be installed by cargo, uv, npm and Homebrew, and whichever directory comes first on `$PATH` is the one you actually run. `vership update-local` closes that gap:
+
+```
+$ vership update-local
+update-local 0.5.13
+  ok   cargo      0.5.12 -> 0.5.13
+  ok   uv         0.5.13
+  ok   vership    /Users/you/.cargo/bin/vership (cargo 0.5.13)
+                  shadowed /usr/local/bin/vership (unmanaged)
+```
+
+Only managers that already hold the package are touched; nothing is newly installed. The package name each manager is asked about comes from the same detection `verify` uses: the crate name from Cargo.toml, the project name from pyproject.toml, the package name from package.json, the formula from the detected tap.
+
+Before anything is installed, each manager's registry is checked for the target version. This matters because an unpinned reinstall is a silent downgrade: `cargo install <crate> --force` fetches whatever the registry currently serves and exits 0, so running it a minute after `vership bump` would reinstall the version you just replaced. A registry that has not caught up reports `unpublished` (exit 8, retryable) and runs nothing, for every manager and not only the lagging one: registries publish at different speeds on the same release, and a half-updated machine is not a state "retry and you are done" can describe. Exit 8 therefore means the machine is exactly as it was. `--dry-run` reports the same wait and the same exit 8, because a preview that claimed the installs would run would be predicting something a real run at that moment would not do; the commands are still printed. It composes with [tarry](https://github.com/rvben/tarry) to close a release in one line:
+
+```sh
+vership bump patch && tarry cmd --timeout 20m -- vership update-local
+```
+
+After the installs, every copy of every executable on `$PATH` is reported in `$PATH` order. Ownership is decided by resolved file identity, not by directory, so a hand-copied binary sitting next to a uv shim is reported as unmanaged rather than credited to uv, and its version is left blank rather than guessed. A copy resolving into a Homebrew keg is the one exception, credited to brew at the version the keg path states, since Homebrew owns everything under `Cellar/` by construction. That covers the copies no manager was asked about: brew is probed only when the project's tap is detected. Exit 1 when an install fails, or when a stale or unmanaged copy shadows the one that was updated: an update nothing reaches is not an update.
+
+Installs that would not reproduce the release are reported and left alone: a git or alternate-registry install, and a `cargo install --path` install of a different project. A `--path` install of the project you are in is rebuilt from it.
+
+Caveat: the uv update is a pinned `uv tool install <pkg>==<version> --reinstall --refresh`, which is the only deterministic form (`uv tool upgrade` has no `--refresh` and reports nothing to do against a cached index). A pinned reinstall drops `--with` extras the tool was originally installed with; re-add them by hand if you use them.
 
 ## Changelog Format
 

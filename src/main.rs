@@ -86,6 +86,18 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             skip.as_deref(),
             &output,
         ),
+        Command::UpdateLocal {
+            version,
+            managers,
+            skip,
+            dry_run,
+        } => vership::update_local::run(
+            version.as_deref(),
+            managers.as_deref(),
+            skip.as_deref(),
+            dry_run,
+            &output,
+        ),
         Command::Preflight => vership::release::preflight(),
         Command::Changelog => vership::release::changelog_preview(),
         Command::Bump {
@@ -257,6 +269,54 @@ mod tests {
                 assert_eq!(skip.as_deref(), Some("npm"));
             }
             _ => panic!("expected Verify"),
+        }
+    }
+
+    #[test]
+    fn cli_update_local_defaults() {
+        let cli = Cli::try_parse_from(["vership", "update-local"]).unwrap();
+        match cli.command {
+            Command::UpdateLocal {
+                version,
+                managers,
+                skip,
+                dry_run,
+            } => {
+                assert!(version.is_none());
+                assert!(managers.is_none());
+                assert!(skip.is_none());
+                assert!(!dry_run);
+            }
+            _ => panic!("expected UpdateLocal"),
+        }
+    }
+
+    #[test]
+    fn cli_update_local_with_version_and_filters() {
+        let cli = Cli::try_parse_from([
+            "vership",
+            "update-local",
+            "1.2.3",
+            "--managers",
+            "cargo,uv",
+            "--skip",
+            "brew",
+            "--dry-run",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::UpdateLocal {
+                version,
+                managers,
+                skip,
+                dry_run,
+            } => {
+                assert_eq!(version.as_deref(), Some("1.2.3"));
+                assert_eq!(managers.as_deref(), Some("cargo,uv"));
+                assert_eq!(skip.as_deref(), Some("brew"));
+                assert!(dry_run);
+            }
+            _ => panic!("expected UpdateLocal"),
         }
     }
 

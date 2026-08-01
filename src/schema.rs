@@ -238,6 +238,53 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                 ]
             },
             {
+                "name": "update-local",
+                "description": "Update this machine's installs of the released package (cargo, uv, npm, Homebrew) to a version, then report which copy $PATH actually reaches. Each manager is checked against its registry before anything is installed, so a version that is not published yet reports outcome 'unpublished' (exit 8, retryable) instead of silently reinstalling the current version. Exit 1 when an install fails or when a stale or unmanaged copy shadows the updated one on $PATH. Compose with tarry to close a release: vership bump patch && tarry cmd -- vership update-local.",
+                "mutating": true,
+                "args": [
+                    {
+                        "name": "version",
+                        "type": "string",
+                        "required": false,
+                        "description": "Version to install, with or without leading v (defaults to the on-disk version)"
+                    },
+                    {
+                        "name": "--managers",
+                        "type": "string",
+                        "required": false,
+                        "description": "Comma-separated subset of package managers to update: cargo, uv, npm, brew"
+                    },
+                    {
+                        "name": "--skip",
+                        "type": "string",
+                        "required": false,
+                        "description": "Comma-separated package managers to skip"
+                    },
+                    {
+                        "name": "--dry-run",
+                        "type": "boolean",
+                        "required": false,
+                        "description": "Print the install commands without running them"
+                    }
+                ],
+                "output_fields": [
+                    {"name": "version", "type": "string", "description": "Target version"},
+                    {"name": "ok", "type": "boolean", "description": "True when every managed install is at the version and $PATH reaches one of them"},
+                    {"name": "changed", "type": "boolean", "description": "True when at least one install was updated"},
+                    {"name": "dry_run", "type": "boolean", "description": "True when nothing was executed"},
+                    {
+                        "name": "installs",
+                        "type": "array",
+                        "description": "Per-manager results: {manager, package, before, after, action, detail, commands}; action is one of already-current, updated, planned, pending, skipped, failed"
+                    },
+                    {
+                        "name": "binaries",
+                        "type": "array",
+                        "description": "Per-executable $PATH resolution: {name, path, manager, version, shadowed}; path is the copy the shell runs, shadowed lists the copies behind it. A null manager is an unmanaged copy, whose version is deliberately not guessed."
+                    }
+                ]
+            },
+            {
                 "name": "config",
                 "description": "Configuration management.",
                 "mutating": false,

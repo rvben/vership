@@ -674,6 +674,54 @@ fn schema_includes_verify_command() {
     assert!(args.contains(&"--skip"));
 }
 
+/// The update-local command must be declared in the schema, marked mutating,
+/// and carry every argument the CLI accepts.
+#[test]
+fn schema_includes_update_local_command() {
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .args(["schema"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let doc: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let update_local = doc["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "update-local")
+        .expect("update-local command in schema");
+    assert_eq!(
+        update_local["mutating"], true,
+        "update-local installs software, so it must be marked mutating"
+    );
+    let args: Vec<&str> = update_local["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["name"].as_str().unwrap())
+        .collect();
+    for expected in ["version", "--managers", "--skip", "--dry-run"] {
+        assert!(args.contains(&expected), "missing arg {expected}: {args:?}");
+    }
+    let fields: Vec<&str> = update_local["output_fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap())
+        .collect();
+    for expected in [
+        "version", "ok", "changed", "dry_run", "installs", "binaries",
+    ] {
+        assert!(
+            fields.contains(&expected),
+            "missing output field {expected}: {fields:?}"
+        );
+    }
+}
+
 /// The unpublished outcome must carry exit code 8 and be retryable.
 #[test]
 fn schema_includes_unpublished_outcome() {
