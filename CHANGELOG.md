@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.13](https://github.com/rvben/vership/compare/v0.5.12...v0.5.13) - 2026-08-01
+
+### Added
+
+- **update-local**: update this machine's installs to a released version ([c6400f8](https://github.com/rvben/vership/commit/c6400f819b60df3eee8b99372404a533066b96b8))
+
 ## [0.5.12](https://github.com/rvben/vership/compare/v0.5.11...v0.5.12) - 2026-08-01
 
 ### Fixed
