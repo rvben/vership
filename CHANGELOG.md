@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.14](https://github.com/rvben/vership/compare/v0.5.13...v0.5.14) - 2026-08-05
+
+### Fixed
+
+- **update-local**: report an unresolvable install as unpublished, not an error ([998d124](https://github.com/rvben/vership/commit/998d12461bb28fa46b7d600abe3ef3f4a72147a5))
+
 ## [0.5.13](https://github.com/rvben/vership/compare/v0.5.12...v0.5.13) - 2026-08-01
 
 ### Added
