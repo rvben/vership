@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.15](https://github.com/rvben/vership/compare/v0.5.14...v0.5.15) - 2026-08-06
+
+### Fixed
+
+- **update-local**: find workspace installs and scan the project's own binaries ([ec4051f](https://github.com/rvben/vership/commit/ec4051fcccedc9cdb6967d43fce41678863f32d6))
+
 ## [0.5.14](https://github.com/rvben/vership/compare/v0.5.13...v0.5.14) - 2026-08-05
 
 ### Fixed
