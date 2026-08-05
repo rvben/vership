@@ -1,5 +1,6 @@
 use serde_json::json;
 
+use super::managers::Manager;
 use super::pathscan::{BinaryReport, Copy};
 use super::{Action, InstallReport};
 use crate::output::OutputConfig;
@@ -7,29 +8,38 @@ use crate::output::OutputConfig;
 /// Width of the name column, matching `verify`'s report.
 const NAME: usize = 10;
 
-pub fn render(
-    version: &str,
-    ok: bool,
-    dry_run: bool,
-    installs: &[InstallReport],
-    binaries: &[BinaryReport],
-    settled: bool,
-    output: &OutputConfig,
-) {
+/// Everything one `update-local` pass has to say about itself.
+pub struct Report<'a> {
+    pub version: &'a str,
+    pub ok: bool,
+    pub dry_run: bool,
+    pub installs: &'a [InstallReport],
+    pub binaries: &'a [BinaryReport],
+    /// Whether every install has reached its final state. An outstanding one
+    /// leaves the copies on `$PATH` reported without a verdict.
+    pub settled: bool,
+    /// What each manager was asked about, whether or not it held anything.
+    pub considered: &'a [(Manager, Vec<String>)],
+}
+
+pub fn render(report: &Report<'_>, output: &OutputConfig) {
     if output.is_json() {
-        render_json(version, ok, dry_run, installs, binaries);
+        render_json(report);
     } else {
-        render_text(version, dry_run, installs, binaries, settled);
+        render_text(report);
     }
 }
 
-fn render_json(
-    version: &str,
-    ok: bool,
-    dry_run: bool,
-    installs: &[InstallReport],
-    binaries: &[BinaryReport],
-) {
+fn render_json(report: &Report<'_>) {
+    let Report {
+        version,
+        ok,
+        dry_run,
+        installs,
+        binaries,
+        considered,
+        ..
+    } = *report;
     let changed = installs.iter().any(|i| i.action == Action::Updated);
     let installs: Vec<_> = installs
         .iter()
@@ -62,6 +72,18 @@ fn render_json(
             })
         })
         .collect();
+    // What each manager was asked about. An empty `installs` otherwise reads
+    // the same whether this project has nothing a manager could hold or has
+    // something that is simply not installed.
+    let considered: Vec<_> = considered
+        .iter()
+        .map(|(manager, names)| {
+            json!({
+                "manager": manager.name(),
+                "packages": names,
+            })
+        })
+        .collect();
     println!(
         "{}",
         json!({
@@ -71,21 +93,36 @@ fn render_json(
             "dry_run": dry_run,
             "installs": installs,
             "binaries": binaries,
+            "considered": considered,
         })
     );
 }
 
-fn render_text(
-    version: &str,
-    dry_run: bool,
-    installs: &[InstallReport],
-    binaries: &[BinaryReport],
-    settled: bool,
-) {
+fn render_text(report: &Report<'_>) {
+    let Report {
+        version,
+        dry_run,
+        installs,
+        binaries,
+        settled,
+        considered,
+        ..
+    } = *report;
     let suffix = if dry_run { " (dry run)" } else { "" };
     println!("update-local {version}{suffix}");
     if installs.is_empty() {
-        println!("  ok   {:<NAME$} not installed locally", "-");
+        // Naming what was asked about keeps this line from claiming more than
+        // it knows. "Not installed locally" is a statement about packages that
+        // were looked for, and with nothing to look for it would be asserting
+        // an absence that was never checked.
+        let detail = match considered.is_empty() {
+            true => "no cargo, uv, npm or brew package found in this project".to_string(),
+            false => format!(
+                "not installed locally (looked for {})",
+                describe_considered(considered)
+            ),
+        };
+        println!("  ok   {:<NAME$} {detail}", "-");
     }
     for i in installs {
         println!(
@@ -143,6 +180,30 @@ fn install_detail(i: &InstallReport) -> String {
         Some(detail) => format!("{versions}  {detail}"),
         None => versions,
     }
+}
+
+/// The packages each manager was asked about, as `cargo husker, husker-core`.
+/// A workspace contributes one name per member, so this is capped: past a few
+/// names the list stops being something a reader takes in, and the JSON report
+/// carries the full set for anything that needs it.
+fn describe_considered(considered: &[(Manager, Vec<String>)]) -> String {
+    const SHOWN: usize = 3;
+    considered
+        .iter()
+        .map(|(manager, names)| {
+            let shown = names
+                .iter()
+                .take(SHOWN)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            match names.len().saturating_sub(SHOWN) {
+                0 => format!("{} {shown}", manager.name()),
+                more => format!("{} {shown} +{more} more", manager.name()),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// How a copy on `$PATH` is owned. An unmanaged copy carries no version,

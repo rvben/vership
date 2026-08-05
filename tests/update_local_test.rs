@@ -29,6 +29,36 @@ fn project(crate_name: &str, version: &str) -> TempDir {
     dir
 }
 
+/// A virtual workspace: a root declaring no package of its own, and one member
+/// crate at `crates/<crate_name>` with a binary. Returns the root, whose member
+/// directory is what `cargo install --path` would record.
+fn workspace(crate_name: &str, version: &str) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        format!(
+            "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.package]\nversion = \"{version}\"\n"
+        ),
+    )
+    .unwrap();
+    let member = dir.path().join("crates").join(crate_name);
+    fs::create_dir_all(member.join("src")).unwrap();
+    fs::write(
+        member.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"{crate_name}\"\nversion.workspace = true\nedition = \"2021\"\n"
+        ),
+    )
+    .unwrap();
+    fs::write(member.join("src/main.rs"), "fn main() {}\n").unwrap();
+    dir
+}
+
+/// The directory of the member crate `workspace` created.
+fn member_dir(root: &Path, crate_name: &str) -> PathBuf {
+    root.join("crates").join(crate_name)
+}
+
 /// A `CARGO_HOME` recording the given `cargo install` entries, in the format
 /// cargo reads them back from.
 fn cargo_home(entries: &[String]) -> TempDir {
@@ -110,6 +140,131 @@ fn a_package_installed_nowhere_locally_is_a_clean_pass() {
     assert_eq!(doc["changed"], false);
     assert_eq!(doc["installs"].as_array().unwrap().len(), 0);
     assert_eq!(doc["binaries"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn a_stale_copy_shadowing_a_workspace_binary_is_not_a_clean_pass() {
+    let root = workspace("vership-e2e-demo", "0.2.0");
+    // Nothing installed by any manager, which is what a workspace used to
+    // produce whether or not anything was installed: the root declares no
+    // package, so no package name was ever probed for.
+    let home = cargo_home(&[]);
+    let unmanaged = TempDir::new().unwrap();
+    write_executable(unmanaged.path(), "vership-e2e-demo");
+
+    let run = |dirs: &[&Path]| {
+        AssertCommand::cargo_bin("vership")
+            .unwrap()
+            .current_dir(root.path())
+            .env("CARGO_HOME", home.path())
+            .env_remove("CARGO_INSTALL_ROOT")
+            .env("PATH", path_with(dirs))
+            .args(["update-local", "--managers", "cargo", "-o", "json"])
+            .output()
+            .expect("vership runs")
+    };
+
+    let output = run(&[unmanaged.path()]);
+    let doc = json(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a stale copy on PATH must not pass: {doc}"
+    );
+    let binary = &doc["binaries"].as_array().unwrap()[0];
+    assert_eq!(binary["name"], "vership-e2e-demo");
+    assert_eq!(
+        fs::canonicalize(binary["path"].as_str().unwrap()).unwrap(),
+        fs::canonicalize(unmanaged.path().join("vership-e2e-demo")).unwrap(),
+        "the copy that wins PATH must be the one reported"
+    );
+
+    // The control: the same project with that copy off PATH passes, so the
+    // failure above is the stale binary and not the workspace itself.
+    let empty = TempDir::new().unwrap();
+    let output = run(&[empty.path()]);
+    let doc = json(&output);
+    assert_eq!(output.status.code(), Some(0), "{doc}");
+    assert_eq!(
+        doc["binaries"].as_array().unwrap()[0]["path"],
+        serde_json::Value::Null,
+        "the name is still scanned for, and simply not found"
+    );
+}
+
+#[test]
+fn a_workspace_members_install_belongs_to_this_project() {
+    let root = workspace("vership-e2e-demo", "0.2.0");
+    // `cargo install --path .` run at the workspace root records the member
+    // directory, not the root. Judging ownership by the root alone reads this
+    // as another project's install and leaves it behind.
+    let home = cargo_home(&[path_entry(
+        "vership-e2e-demo",
+        "0.1.0",
+        &member_dir(root.path(), "vership-e2e-demo"),
+        "vership-e2e-demo",
+    )]);
+
+    let output = update_local(
+        root.path(),
+        home.path(),
+        &["--dry-run", "--managers", "cargo", "-o", "json"],
+    );
+
+    let doc = json(&output);
+    assert_eq!(output.status.code(), Some(0), "{doc}");
+    let installs = doc["installs"].as_array().unwrap();
+    assert_eq!(
+        installs.len(),
+        1,
+        "the member's install must be found: {doc}"
+    );
+    assert_eq!(installs[0]["action"], "planned");
+    let argv: Vec<&str> = installs[0]["commands"].as_array().unwrap()[0]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        fs::canonicalize(argv[3]).unwrap(),
+        fs::canonicalize(member_dir(root.path(), "vership-e2e-demo")).unwrap(),
+        "the rebuild must point at the member crate: {argv:?}"
+    );
+}
+
+#[test]
+fn nothing_installed_reports_what_was_looked_for() {
+    let root = project("vership-e2e-absent", "0.2.0");
+    let home = cargo_home(&[]);
+
+    let output = update_local(
+        root.path(),
+        home.path(),
+        &["--managers", "cargo", "-o", "json"],
+    );
+
+    let doc = json(&output);
+    assert_eq!(output.status.code(), Some(0), "{doc}");
+    assert_eq!(doc["installs"].as_array().unwrap().len(), 0);
+    // An empty `installs` alone cannot say whether this project has nothing a
+    // manager could hold or has something that is simply not installed.
+    assert_eq!(
+        doc["considered"],
+        serde_json::json!([{"manager": "cargo", "packages": ["vership-e2e-absent"]}])
+    );
+
+    // The control: a project with no manifest any manager reads considers
+    // nothing, and says so by naming nothing rather than by the same empty list.
+    let bare = TempDir::new().unwrap();
+    let output = update_local(
+        bare.path(),
+        home.path(),
+        &["0.2.0", "--managers", "cargo", "-o", "json"],
+    );
+    let doc = json(&output);
+    assert_eq!(output.status.code(), Some(0), "{doc}");
+    assert_eq!(doc["considered"], serde_json::json!([]));
 }
 
 #[test]
@@ -403,6 +558,43 @@ fn a_manifest_no_selected_manager_needs_is_never_read() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("parse package.json"),
+        "the control must fail on the manifest itself: {stderr}"
+    );
+}
+
+#[test]
+fn a_cargo_manifest_is_not_read_by_a_run_that_excludes_cargo() {
+    // The mirror of the test above, and the one a workspace makes easy to
+    // break: Cargo.toml is now read for the member directories and binary
+    // names, which every manager's run needs eventually and only a cargo run
+    // needs at all.
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("Cargo.toml"), "[package\nname = broken\n").unwrap();
+    fs::write(
+        root.path().join("package.json"),
+        r#"{"name": "vership-e2e-demo", "version": "0.2.0"}"#,
+    )
+    .unwrap();
+    let home = cargo_home(&[]);
+
+    let output = update_local(
+        root.path(),
+        home.path(),
+        &["0.2.0", "--managers", "npm", "-o", "json"],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an npm-only run must not read Cargo.toml: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The control: the same file does break a run that selects cargo.
+    let output = update_local(root.path(), home.path(), &["0.2.0", "--managers", "cargo"]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("parse ./Cargo.toml"),
         "the control must fail on the manifest itself: {stderr}"
     );
 }

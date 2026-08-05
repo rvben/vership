@@ -280,7 +280,12 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                     {
                         "name": "binaries",
                         "type": "array",
-                        "description": "Per-executable $PATH resolution: {name, path, manager, version, shadowed}; path is the copy the shell runs, shadowed lists the copies behind it. A null manager is an unmanaged copy, whose version is deliberately not guessed."
+                        "description": "Per-executable $PATH resolution: {name, path, manager, version, shadowed}; path is the copy the shell runs, shadowed lists the copies behind it. A null path means the name was looked for and not found. A null manager is an unmanaged copy, whose version is deliberately not guessed. The names scanned are the project's own declared binaries as well as any an install provides, so a stale copy is still caught when no manager holds the package."
+                    },
+                    {
+                        "name": "considered",
+                        "type": "array",
+                        "description": "What each manager was asked about: {manager, packages}. Distinguishes the two causes of an empty installs list: an empty considered means this project publishes nothing that manager could hold, a non-empty one means it does and none is installed. A Cargo workspace contributes one entry per member package."
                     }
                 ]
             },

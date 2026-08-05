@@ -172,36 +172,51 @@ fn parse_cargo_install_root(config: &str) -> Option<String> {
 }
 
 fn probe_cargo(name: &str) -> Option<Install> {
-    let (ok, stdout) = capture("cargo", &["install", "--list"])?;
+    probe_cargo_all(&[name.to_string()]).into_iter().next()
+}
+
+/// Every cargo install naming one of `names`, in the order given.
+///
+/// One `cargo install --list` answers for the whole set. A workspace has as
+/// many candidate package names as it has members, and asking once per name
+/// would run the same command a dozen times to read the same output.
+fn probe_cargo_all(names: &[String]) -> Vec<Install> {
+    let Some((ok, stdout)) = capture("cargo", &["install", "--list"]) else {
+        return Vec::new();
+    };
     if !ok {
-        return None;
+        return Vec::new();
     }
-    let entry = parse_cargo_install_list(&stdout)
-        .into_iter()
-        .find(|e| e.name == name)?;
+    let entries = parse_cargo_install_list(&stdout);
     let bin_dir = cargo_bin_dir(
         |key| std::env::var(key).ok(),
         |path| std::fs::read_to_string(path).ok(),
     );
-    let bin_paths = bin_dir
-        .as_ref()
-        .map(|dir| {
-            entry
-                .bins
-                .iter()
-                .filter_map(|bin| canonical(&dir.join(bin)))
-                .collect()
+    names
+        .iter()
+        .filter_map(|name| entries.iter().find(|e| &e.name == name))
+        .map(|entry| {
+            let bin_paths = bin_dir
+                .as_ref()
+                .map(|dir| {
+                    entry
+                        .bins
+                        .iter()
+                        .filter_map(|bin| canonical(&dir.join(bin)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Install {
+                manager: Manager::Cargo,
+                package: entry.name.clone(),
+                version: entry.version.clone(),
+                source: entry.source.clone(),
+                bins: entry.bins.clone(),
+                bin_paths,
+                root: None,
+            }
         })
-        .unwrap_or_default();
-    Some(Install {
-        manager: Manager::Cargo,
-        package: entry.name,
-        version: entry.version,
-        source: entry.source,
-        bins: entry.bins,
-        bin_paths,
-        root: None,
-    })
+        .collect()
 }
 
 // --- uv ---
@@ -464,8 +479,37 @@ pub fn probe(manager: Manager, package: &Package) -> Option<Install> {
         (Manager::Uv, Package::Named(name)) => probe_uv(name),
         (Manager::Npm, Package::Named(name)) => probe_npm(name),
         (Manager::Brew, Package::Candidates(formulas)) => probe_brew(formulas),
+        // First match, as with Homebrew's formulas: a candidate list is ordered
+        // by preference, so the last one is nobody's idea of the answer.
+        (Manager::Cargo, Package::Candidates(names)) => probe_cargo_all(names).into_iter().next(),
         _ => None,
     }
+}
+
+/// Every install one manager holds of this project's packages.
+///
+/// Only cargo can hold more than one: a workspace publishes several binaries
+/// from a single repository, and each is its own install to keep current.
+pub fn probe_all(manager: Manager, package: &Package) -> Vec<Install> {
+    match (manager, package) {
+        (Manager::Cargo, Package::Candidates(names)) => probe_cargo_all(names),
+        _ => probe(manager, package).into_iter().collect(),
+    }
+}
+
+/// Re-read what a manager holds after installing.
+///
+/// Asked by the name the manager itself reported rather than the candidate list
+/// the run started from: a candidate list can name a dozen packages, and what
+/// matters here is the state of the one just installed. Homebrew is probed by
+/// formula candidates rather than by package name, so its single name is passed
+/// back in the form its probe accepts.
+pub fn reprobe(install: &Install) -> Option<Install> {
+    let package = match install.manager {
+        Manager::Brew => Package::Candidates(vec![install.package.clone()]),
+        _ => Package::Named(install.package.clone()),
+    };
+    probe(install.manager, &package)
 }
 
 /// What a manager should be asked about: one exact name, or the ordered

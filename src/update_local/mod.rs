@@ -77,41 +77,42 @@ pub fn run(
         true => homebrew_target(root, &config)?,
         false => None,
     };
-    let packages = packages(root, homebrew.as_ref(), &selected)?;
-    let mut installs: Vec<(Package, Install)> = Vec::new();
-    for (manager, package) in packages {
-        if let Some(install) = managers::probe(manager, &package) {
-            installs.push((package, install));
-        }
+    // Resolved once: these carry the member directories that decide which path
+    // installs belong to this project, and the binary names to look for on
+    // `$PATH` whether or not any manager turns out to hold them. Left unread
+    // when cargo is not one of this run's managers, for the same reason the tap
+    // above is: a manifest no selected manager needs cannot fail the run.
+    let cargo = match selected.contains(&Manager::Cargo) {
+        true => targets::cargo_local_packages(root)?,
+        false => Vec::new(),
+    };
+    let packages = packages(root, homebrew.as_ref(), &selected, &cargo)?;
+    let considered = considered(&packages);
+    let mut installs: Vec<Install> = Vec::new();
+    for (manager, package) in &packages {
+        installs.extend(managers::probe_all(*manager, package));
     }
 
     // Every manager is decided before any of them is touched, so the decision
     // to run nothing is taken with the whole machine in view.
     let agent = checkers::default_agent();
     let registries = Registries::live(&agent, homebrew.as_ref());
+    let owned = owned_dirs(root, &cargo);
     let decisions: Vec<Decision> = installs
         .iter()
-        .map(|(_, install)| decide(&registries, root, install, &version))
+        .map(|install| decide(&registries, &owned, install, &version))
         .collect();
     let hold = hold(dry_run, &decisions);
 
     let mut reports: Vec<InstallReport> = Vec::new();
     let mut current: Vec<Install> = Vec::new();
-    for ((package, install), decision) in installs.iter().zip(decisions) {
-        let (report, after) = carry_out(
-            &registries,
-            install,
-            package,
-            &version,
-            decision,
-            hold,
-            output,
-        );
+    for (install, decision) in installs.iter().zip(decisions) {
+        let (report, after) = carry_out(&registries, install, &version, decision, hold, output);
         current.push(after.unwrap_or_else(|| install.clone()));
         reports.push(report);
     }
 
-    let names = binary_names(&current);
+    let names = binary_names(&current, &cargo);
     let dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
@@ -121,15 +122,54 @@ pub fn run(
 
     let verdict = verdict(&reports, &binaries, &version);
     report::render(
-        &version,
-        verdict.is_ok(),
-        dry_run,
-        &reports,
-        &binaries,
-        settled(&reports),
+        &report::Report {
+            version: &version,
+            ok: verdict.is_ok(),
+            dry_run,
+            installs: &reports,
+            binaries: &binaries,
+            settled: settled(&reports),
+            considered: &considered,
+        },
         output,
     );
     verdict
+}
+
+/// The directories whose path installs belong to this project: the project root
+/// and every Cargo package in it.
+///
+/// `cargo install --path .` records the directory holding the crate's manifest,
+/// which in a workspace is the member directory rather than the root the
+/// command was run from. Comparing against the root alone therefore reads a
+/// workspace's own install as some other project's and leaves it behind.
+fn owned_dirs(root: &Path, cargo: &[targets::CargoLocalPackage]) -> Vec<PathBuf> {
+    let mut dirs = vec![root.to_path_buf()];
+    for package in cargo {
+        if !dirs.contains(&package.dir) {
+            dirs.push(package.dir.clone());
+        }
+    }
+    dirs
+}
+
+/// The package names this run asked each manager about, for the report.
+///
+/// An empty `installs` has two very different causes: this project publishes
+/// nothing a manager could hold, or it does and none is installed. Naming what
+/// was asked about makes those distinguishable instead of leaving the caller to
+/// read an empty list as either.
+fn considered(packages: &[(Manager, Package)]) -> Vec<(Manager, Vec<String>)> {
+    packages
+        .iter()
+        .map(|(manager, package)| {
+            let names = match package {
+                Package::Named(name) => vec![name.clone()],
+                Package::Candidates(names) => names.clone(),
+            };
+            (*manager, names)
+        })
+        .collect()
 }
 
 /// The managers to probe, and the package name each should be asked about.
@@ -141,13 +181,21 @@ fn packages(
     root: &Path,
     homebrew: Option<&(String, Vec<String>)>,
     selected: &[Manager],
+    cargo: &[targets::CargoLocalPackage],
 ) -> Result<Vec<(Manager, Package)>> {
     let mut packages = Vec::new();
     for manager in selected {
         let package = match manager {
-            // The crate name is read even from an unpublishable crate: `cargo
-            // install --path` reaches it.
-            Manager::Cargo => targets::cargo_identity(root)?.map(|c| Package::Named(c.name)),
+            // Every Cargo package in the project, not just a root one: a
+            // workspace root declares no package of its own, and its members
+            // are what `cargo install` holds. Unpublishable crates are included
+            // too, because `cargo install --path` reaches them.
+            Manager::Cargo => match cargo {
+                [] => None,
+                packages => Some(Package::Candidates(
+                    packages.iter().map(|p| p.name.clone()).collect(),
+                )),
+            },
             Manager::Uv => targets::pypi_project_name(root)?.map(Package::Named),
             Manager::Npm => targets::npm_package_name(root)?.map(Package::Named),
             Manager::Brew => homebrew.map(|(_, formulas)| Package::Candidates(formulas.clone())),
@@ -223,8 +271,13 @@ impl<'a> Registries<'a> {
 
 /// Decide what one install needs: what would bring it to the target version,
 /// and whether the registry can serve that yet. Nothing here changes anything.
-fn decide(registries: &Registries<'_>, root: &Path, install: &Install, version: &str) -> Decision {
-    let commands = match plan(install, version, root) {
+fn decide(
+    registries: &Registries<'_>,
+    owned: &[PathBuf],
+    install: &Install,
+    version: &str,
+) -> Decision {
+    let commands = match plan(install, version, owned) {
         Planned::AlreadyCurrent => return Decision::AlreadyCurrent,
         Planned::Skip(reason) => return Decision::Skip(reason),
         Planned::Install(commands) => commands,
@@ -263,7 +316,6 @@ fn hold(dry_run: bool, decisions: &[Decision]) -> Option<Hold> {
 fn carry_out(
     registries: &Registries<'_>,
     install: &Install,
-    package: &Package,
     version: &str,
     decision: Decision,
     hold: Option<Hold>,
@@ -315,7 +367,7 @@ fn carry_out(
         return (row(action, Some(detail), commands), None);
     }
 
-    match managers::probe(install.manager, package) {
+    match managers::reprobe(install) {
         Some(after) if after.version == version => {
             let mut report = row(Action::Updated, None, commands);
             report.after = Some(after.version.clone());
@@ -445,12 +497,12 @@ pub(crate) enum Planned {
 
 /// Decide what to do with one install, without touching the network or running
 /// anything.
-pub(crate) fn plan(install: &Install, version: &str, root: &Path) -> Planned {
+pub(crate) fn plan(install: &Install, version: &str, owned: &[PathBuf]) -> Planned {
     if install.version == version {
         return Planned::AlreadyCurrent;
     }
     match &install.source {
-        Source::Path(path) if same_dir(path, root) => {
+        Source::Path(path) if owned.iter().any(|dir| same_dir(path, dir)) => {
             Planned::Install(managers::install_commands(install, version))
         }
         Source::Path(path) => Planned::Skip(format!(
@@ -471,14 +523,21 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Every executable name the surviving installs provide, first-seen order.
-fn binary_names(installs: &[Install]) -> Vec<String> {
+/// Every executable name to look for on `$PATH`, first-seen order.
+///
+/// The project's own declared binaries are included alongside the ones the
+/// surviving installs provide, so the scan does not depend on a manager having
+/// been found. Deriving the list from discovered installs alone makes the
+/// shadowing check inherit every gap in probing: with nothing detected there is
+/// nothing to look for, and a stale copy winning `$PATH` is reported as a clean
+/// pass. That is the failure this list is meant to catch, so it cannot be
+/// conditioned on the detection that failed.
+fn binary_names(installs: &[Install], cargo: &[targets::CargoLocalPackage]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    for install in installs {
-        for bin in &install.bins {
-            if !names.contains(bin) {
-                names.push(bin.clone());
-            }
+    let declared = cargo.iter().flat_map(|p| p.bins.iter());
+    for bin in installs.iter().flat_map(|i| i.bins.iter()).chain(declared) {
+        if !names.contains(bin) {
+            names.push(bin.clone());
         }
     }
     names
@@ -592,6 +651,10 @@ mod tests {
     use super::*;
     use pathscan::Copy;
 
+    fn install_at(dir: PathBuf) -> Install {
+        install(Manager::Cargo, "0.4.41", Source::Path(dir))
+    }
+
     fn install(manager: Manager, version: &str, source: Source) -> Install {
         Install {
             manager,
@@ -606,29 +669,75 @@ mod tests {
 
     #[test]
     fn an_install_already_at_the_target_runs_nothing() {
+        let here = vec![PathBuf::from(".")];
         let current = install(Manager::Uv, "0.2.48", Source::Registry);
-        assert_eq!(
-            plan(&current, "0.2.48", Path::new(".")),
-            Planned::AlreadyCurrent
-        );
+        assert_eq!(plan(&current, "0.2.48", &here), Planned::AlreadyCurrent);
         // The negative control: one patch behind, and a command appears.
         let stale = install(Manager::Uv, "0.2.47", Source::Registry);
-        assert!(matches!(
-            plan(&stale, "0.2.48", Path::new(".")),
-            Planned::Install(_)
-        ));
+        assert!(matches!(plan(&stale, "0.2.48", &here), Planned::Install(_)));
     }
 
     #[test]
     fn a_path_install_of_this_project_is_rebuilt_from_it() {
         let here = std::env::current_dir().unwrap();
         let install = install(Manager::Cargo, "0.2.29", Source::Path(here.clone()));
-        let Planned::Install(commands) = plan(&install, "0.2.48", &here) else {
+        let Planned::Install(commands) = plan(&install, "0.2.48", &[here]) else {
             panic!("a path install of this project must be refreshed");
         };
         assert_eq!(
             commands[0][1..3],
             ["install".to_string(), "--path".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_workspace_member_is_this_project_and_an_unrelated_dir_is_not() {
+        // `cargo install --path .` in a workspace records the member directory,
+        // not the root the command ran from, so the root alone never matches.
+        let root = PathBuf::from("/src/husker");
+        let member = root.join("crates/husker");
+        let owned = vec![root.clone(), member.clone()];
+
+        let install = install(Manager::Cargo, "0.4.41", Source::Path(member));
+        assert!(
+            matches!(plan(&install, "0.4.42", &owned), Planned::Install(_)),
+            "a member's own install belongs to this project"
+        );
+        // The negative control, and the reason ownership is a member list
+        // rather than a prefix test: a nested checkout sits under the root
+        // without being part of this workspace.
+        let nested = install_at(root.join("vendor/other"));
+        let planned = plan(&nested, "0.4.42", &owned);
+        assert!(
+            matches!(&planned, Planned::Skip(reason) if reason.contains("vendor/other")),
+            "got {planned:?}"
+        );
+    }
+
+    #[test]
+    fn every_cargo_package_directory_is_one_this_project_owns() {
+        // The list `plan` judges against. Built from the root alone, a
+        // workspace's own install reads as some other project's, so the two
+        // halves are checked separately: this is where the member directories
+        // enter, and the test above is what does with them.
+        let root = PathBuf::from("/src/husker");
+        let member = |name: &str, bins: &[&str]| targets::CargoLocalPackage {
+            name: name.to_string(),
+            dir: root.join("crates").join(name),
+            bins: bins.iter().map(|b| b.to_string()).collect(),
+        };
+        let dirs = owned_dirs(
+            &root,
+            &[member("husker", &["husker"]), member("husker-core", &[])],
+        );
+        assert_eq!(
+            dirs,
+            vec![
+                root.clone(),
+                root.join("crates/husker"),
+                root.join("crates/husker-core"),
+            ],
+            "a library member counts too: `cargo install --path` reaches it"
         );
     }
 
@@ -639,7 +748,7 @@ mod tests {
             "0.2.29",
             Source::Path(PathBuf::from("/somewhere/else")),
         );
-        let planned = plan(&install, "0.2.48", Path::new("/here"));
+        let planned = plan(&install, "0.2.48", &[PathBuf::from("/here")]);
         assert!(
             matches!(&planned, Planned::Skip(reason) if reason.contains("/somewhere/else")),
             "got {planned:?}"
@@ -654,7 +763,7 @@ mod tests {
             Source::Foreign("https://github.com/other/rumdl#abc".to_string()),
         );
         assert!(matches!(
-            plan(&install, "0.2.48", Path::new(".")),
+            plan(&install, "0.2.48", &[PathBuf::from(".")]),
             Planned::Skip(_)
         ));
     }
@@ -683,7 +792,6 @@ mod tests {
     #[test]
     fn a_held_install_reports_its_command_without_running_it() {
         let install = install(Manager::Cargo, "0.2.29", Source::Registry);
-        let package = Package::Named("rumdl".to_string());
         let commands = vec![vec!["cargo".to_string(), "install".to_string()]];
         let output = OutputConfig::new(crate::cli::OutputFormat::Json, false);
         // A hold returns before anything is run or asked, so nothing here
@@ -694,7 +802,6 @@ mod tests {
         let (report, after) = carry_out(
             &registries,
             &install,
-            &package,
             "0.2.48",
             Decision::Run(commands.clone()),
             Some(Hold::Waiting),
@@ -709,7 +816,6 @@ mod tests {
         let (report, _) = carry_out(
             &registries,
             &install,
-            &package,
             "0.2.48",
             Decision::Run(commands.clone()),
             Some(Hold::DryRun),
@@ -1034,7 +1140,35 @@ mod tests {
         let mut cargo = install(Manager::Cargo, "1.0.0", Source::Registry);
         cargo.bins = vec!["rumdl".to_string(), "rumdl-lsp".to_string()];
         assert_eq!(
-            binary_names(&[uv, cargo]),
+            binary_names(&[uv, cargo], &[]),
+            vec!["rumdl".to_string(), "rumdl-lsp".to_string()]
+        );
+    }
+
+    fn declared(name: &str, bins: &[&str]) -> targets::CargoLocalPackage {
+        targets::CargoLocalPackage {
+            name: name.to_string(),
+            dir: PathBuf::from("/src").join(name),
+            bins: bins.iter().map(|b| b.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn the_projects_own_binaries_are_scanned_even_with_nothing_installed() {
+        // The case this exists for: probing found no manager at all, which is
+        // exactly when a stale copy on PATH goes unnoticed. Deriving the scan
+        // list from installs alone would return nothing to look for here.
+        assert_eq!(
+            binary_names(&[], &[declared("husker", &["husker"])]),
+            vec!["husker".to_string()]
+        );
+
+        // A declared binary the installs do not mention is still scanned, and
+        // one they both name appears once.
+        let mut uv = install(Manager::Uv, "1.0.0", Source::Registry);
+        uv.bins = vec!["rumdl".to_string()];
+        assert_eq!(
+            binary_names(&[uv], &[declared("rumdl", &["rumdl", "rumdl-lsp"])]),
             vec!["rumdl".to_string(), "rumdl-lsp".to_string()]
         );
     }
