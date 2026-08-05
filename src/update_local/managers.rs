@@ -518,6 +518,30 @@ pub(crate) fn install_commands(install: &Install, version: &str) -> Vec<Vec<Stri
     }
 }
 
+/// The same install with every local cache bypassed, for one retry after a
+/// failure the index says should not have happened. None where the manager has
+/// no such form, so nothing is ever retried blindly.
+///
+/// cargo updates its registry index on every `cargo install`, and brew's own
+/// first command is `brew update`, so neither has a stale local view left to
+/// bypass. uv and npm both cache index metadata with a lifetime, which is the
+/// one explanation for "the index has this version but the install could not
+/// resolve it" that a second attempt can settle.
+pub(crate) fn retry_commands(install: &Install, version: &str) -> Option<Vec<Vec<String>>> {
+    let bypass = match install.manager {
+        Manager::Uv => "--no-cache",
+        Manager::Npm => "--prefer-online",
+        Manager::Cargo | Manager::Brew => return None,
+    };
+    // Derived from the planned install rather than written out again, so the
+    // retry cannot drift into being a different command.
+    let mut commands = install_commands(install, version);
+    for argv in &mut commands {
+        argv.push(bypass.to_string());
+    }
+    Some(commands)
+}
+
 /// Run one install command, letting it write to the terminal as it works.
 /// Stdout is suppressed under JSON output so the structured report stays the
 /// only thing on stdout.
@@ -780,6 +804,60 @@ esptool v5.1.0 (/Users/ruben/.local/share/uv/tools/esptool)
             install_commands(&install_of(Manager::Brew, Source::Registry), "0.2.48"),
             vec![vec!["brew", "update"], vec!["brew", "upgrade", "rumdl"]]
         );
+    }
+
+    #[test]
+    fn only_a_manager_with_a_cache_to_bypass_is_retried() {
+        assert_eq!(
+            retry_commands(&install_of(Manager::Uv, Source::Registry), "0.2.48").unwrap(),
+            vec![vec![
+                "uv",
+                "tool",
+                "install",
+                "rumdl==0.2.48",
+                "--reinstall",
+                "--refresh",
+                "--no-cache"
+            ]]
+        );
+        assert_eq!(
+            retry_commands(&install_of(Manager::Npm, Source::Registry), "0.2.48").unwrap(),
+            vec![vec![
+                "npm",
+                "install",
+                "-g",
+                "rumdl@0.2.48",
+                "--prefer-online"
+            ]]
+        );
+        // cargo refreshes its index on every install and brew's own first
+        // command is `brew update`, so a second attempt would repeat the first.
+        // A cargo retry would also mean a second full build.
+        assert!(retry_commands(&install_of(Manager::Cargo, Source::Registry), "0.2.48").is_none());
+        assert!(
+            retry_commands(
+                &install_of(Manager::Cargo, Source::Path(PathBuf::from("/src/rumdl"))),
+                "0.2.48"
+            )
+            .is_none()
+        );
+        assert!(retry_commands(&install_of(Manager::Brew, Source::Registry), "0.2.48").is_none());
+    }
+
+    #[test]
+    fn a_retry_is_the_planned_install_and_not_a_second_spelling_of_it() {
+        let install = install_of(Manager::Uv, Source::Registry);
+        let planned = install_commands(&install, "0.2.48");
+        let retry = retry_commands(&install, "0.2.48").expect("uv has a cache to bypass");
+        assert_eq!(retry.len(), planned.len());
+        for (retry, planned) in retry.iter().zip(&planned) {
+            assert_eq!(
+                &retry[..planned.len()],
+                &planned[..],
+                "the retry must install exactly what the plan did"
+            );
+            assert_eq!(retry.len(), planned.len() + 1, "adding only the bypass");
+        }
     }
 
     #[test]

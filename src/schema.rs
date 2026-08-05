@@ -239,7 +239,7 @@ pub fn generate(_cmd: &clap::Command) -> Value {
             },
             {
                 "name": "update-local",
-                "description": "Update this machine's installs of the released package (cargo, uv, npm, Homebrew) to a version, then report which copy $PATH actually reaches. Each manager is checked against its registry before anything is installed, so a version that is not published yet reports outcome 'unpublished' (exit 8, retryable) instead of silently reinstalling the current version. Exit 1 when an install fails or when a stale or unmanaged copy shadows the updated one on $PATH. Compose with tarry to close a release: vership bump patch && tarry cmd -- vership update-local.",
+                "description": "Update this machine's installs of the released package (cargo, uv, npm, Homebrew) to a version, then report which copy $PATH actually reaches. Each manager is checked against the index its own installer resolves against before anything is installed, so a version that is not published yet reports outcome 'unpublished' (exit 8, retryable) instead of silently reinstalling the current version. An install that runs anyway and cannot resolve the version is retried once with the manager's cache bypassed, and still reports 'unpublished' rather than a general error, so a registry that has not finished propagating never looks like a permanent failure. Exit 1 when an install fails for any other reason, or when a stale or unmanaged copy shadows the updated one on $PATH. Compose with tarry to close a release: vership bump patch && tarry cmd -- vership update-local.",
                 "mutating": true,
                 "args": [
                     {

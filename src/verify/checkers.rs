@@ -59,6 +59,45 @@ pub fn pypi(agent: &ureq::Agent, base: &str, name: &str, version: &str) -> Check
     )
 }
 
+/// PyPI simple index, the PEP 691 JSON representation an installer negotiates.
+/// `name` must already be PEP 503 normalized.
+///
+/// [`pypi`] above asks `/pypi/<name>/<version>/json`, which no installer reads.
+/// PyPI serves the JSON API and the simple index as separately cached
+/// documents, so the two can disagree about a version published moments ago,
+/// and it is the simple index that decides whether an install resolves. Asking
+/// it is how a pre-flight check reaches the same answer the installer will.
+///
+/// The version list is PEP 700's `versions`. An index that does not carry one
+/// is an unexpected shape rather than an absent version, because "this index
+/// cannot answer" and "this version is not published" are different facts and
+/// only the second one means waiting will help.
+pub fn pypi_simple(agent: &ureq::Agent, base: &str, name: &str, version: &str) -> CheckResult {
+    let response = agent
+        .get(&format!("{base}/simple/{name}/"))
+        .set("User-Agent", USER_AGENT)
+        .set("Accept", "application/vnd.pypi.simple.v1+json")
+        .call();
+    let body = match response {
+        Ok(resp) => match resp.into_json::<serde_json::Value>() {
+            Ok(body) => body,
+            Err(e) => return CheckResult::Error(format!("parse response: {e}")),
+        },
+        Err(ureq::Error::Status(404, _)) => return CheckResult::NotFound,
+        Err(ureq::Error::Status(code, _)) => return CheckResult::Error(format!("HTTP {code}")),
+        Err(e) => return CheckResult::Error(e.to_string()),
+    };
+    let Some(versions) = body["versions"].as_array() else {
+        return CheckResult::Error("index serves no PEP 700 version list".to_string());
+    };
+    match versions.iter().any(|v| v.as_str() == Some(version)) {
+        true => CheckResult::Found(version.to_string()),
+        // PEP 700 does not order `versions`, so naming the version the index
+        // does serve would be a guess. The absence is the actionable fact.
+        false => CheckResult::NotFound,
+    }
+}
+
 /// npm: version manifest path. Scoped names need the slash percent-encoded.
 pub fn npm(agent: &ureq::Agent, base: &str, name: &str, version: &str) -> CheckResult {
     let encoded = name.replace('/', "%2f");

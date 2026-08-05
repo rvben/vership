@@ -305,6 +305,92 @@ fn pypi_not_found_on_404() {
     assert_eq!(result, CheckResult::NotFound);
 }
 
+/// A PEP 691 body as PyPI serves it: the PEP 700 version list alongside files.
+fn simple_index(versions: &[&str]) -> serde_json::Value {
+    serde_json::json!({
+        "meta": {"api-version": "1.1"},
+        "name": "mypkg",
+        "versions": versions,
+        "files": [{"filename": "mypkg-1.2.2-py3-none-any.whl", "url": "https://example.invalid/w"}],
+    })
+}
+
+#[test]
+fn the_simple_index_answers_about_the_exact_version() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/simple/mypkg/");
+        then.status(200)
+            .json_body(simple_index(&["1.2.2", "1.2.3"]));
+    });
+    assert_eq!(
+        checkers::pypi_simple(&agent(), &server.base_url(), "mypkg", "1.2.3"),
+        CheckResult::Found("1.2.3".to_string())
+    );
+    // The same index, one version further on: present and absent have to be
+    // distinguishable from the same body or neither assertion means anything.
+    assert_eq!(
+        checkers::pypi_simple(&agent(), &server.base_url(), "mypkg", "1.2.4"),
+        CheckResult::NotFound
+    );
+}
+
+#[test]
+fn the_simple_index_is_asked_for_the_json_representation_installers_read() {
+    // PyPI serves this URL as HTML unless the JSON representation is
+    // negotiated, and caches the two separately. The mock answers only the
+    // negotiated form, so a request without the header reaches the catch-all
+    // and reports an error rather than quietly passing.
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/simple/mypkg/")
+            .header("Accept", "application/vnd.pypi.simple.v1+json");
+        then.status(200).json_body(simple_index(&["1.2.3"]));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path("/simple/mypkg/");
+        then.status(406);
+    });
+    assert_eq!(
+        checkers::pypi_simple(&agent(), &server.base_url(), "mypkg", "1.2.3"),
+        CheckResult::Found("1.2.3".to_string())
+    );
+}
+
+#[test]
+fn an_index_with_no_version_list_is_an_error_not_an_absent_version() {
+    // A PEP 691 index that predates PEP 700 can answer 200 with files and no
+    // `versions`. Reading that as "not published yet" would invent a fact the
+    // index never stated, and would hold a release back forever.
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/simple/mypkg/");
+        then.status(200).json_body(serde_json::json!({
+            "meta": {"api-version": "1.0"},
+            "name": "mypkg",
+            "files": [{"filename": "mypkg-1.2.3-py3-none-any.whl"}],
+        }));
+    });
+    assert!(matches!(
+        checkers::pypi_simple(&agent(), &server.base_url(), "mypkg", "1.2.3"),
+        CheckResult::Error(_)
+    ));
+}
+
+#[test]
+fn an_unknown_project_is_not_found_on_the_simple_index() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/simple/nosuchpkg/");
+        then.status(404);
+    });
+    assert_eq!(
+        checkers::pypi_simple(&agent(), &server.base_url(), "nosuchpkg", "1.2.3"),
+        CheckResult::NotFound
+    );
+}
+
 #[test]
 fn npm_found_when_exact_version_exists() {
     let server = MockServer::start();
@@ -542,6 +628,16 @@ fn real_registries_find_published_vership() {
         checkers::pypi(&agent, checkers::PYPI, "vership", "0.5.5"),
         CheckResult::Found(_)
     ));
+    // The shape of the real simple index, which no mock can vouch for: PyPI
+    // must actually serve a PEP 700 version list for the checker to read one.
+    assert!(matches!(
+        checkers::pypi_simple(&agent, checkers::PYPI, "vership", "0.5.5"),
+        CheckResult::Found(_)
+    ));
+    assert_eq!(
+        checkers::pypi_simple(&agent, checkers::PYPI, "vership", "99.0.0"),
+        CheckResult::NotFound
+    );
 }
 
 #[test]

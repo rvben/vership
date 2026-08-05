@@ -23,7 +23,9 @@ pub enum Action {
     /// The command that would bring this manager to the target version, not
     /// run: either a dry run, or a pass held back by another manager's registry.
     Planned,
-    /// The registry does not serve the target version yet, so nothing ran.
+    /// The registry does not serve the target version yet: either the
+    /// pre-flight check saw the gap and nothing ran, or the install ran and
+    /// could not resolve the version.
     Pending,
     /// Deliberately left alone: reinstalling would fetch different code.
     Skipped,
@@ -86,16 +88,25 @@ pub fn run(
     // Every manager is decided before any of them is touched, so the decision
     // to run nothing is taken with the whole machine in view.
     let agent = checkers::default_agent();
+    let registries = Registries::live(&agent, homebrew.as_ref());
     let decisions: Vec<Decision> = installs
         .iter()
-        .map(|(_, install)| decide(&agent, root, install, &version, homebrew.as_ref()))
+        .map(|(_, install)| decide(&registries, root, install, &version))
         .collect();
     let hold = hold(dry_run, &decisions);
 
     let mut reports: Vec<InstallReport> = Vec::new();
     let mut current: Vec<Install> = Vec::new();
     for ((package, install), decision) in installs.iter().zip(decisions) {
-        let (report, after) = carry_out(install, package, &version, decision, hold, output);
+        let (report, after) = carry_out(
+            &registries,
+            install,
+            package,
+            &version,
+            decision,
+            hold,
+            output,
+        );
         current.push(after.unwrap_or_else(|| install.clone()));
         reports.push(report);
     }
@@ -183,24 +194,47 @@ enum Hold {
     Waiting,
 }
 
+/// What this run needs to ask a registry a question, fixed for the whole pass.
+///
+/// The roots are carried rather than reached for, the way every checker already
+/// takes its own `base`, so a test can point one at a server it controls and
+/// see which document the check actually asks for.
+struct Registries<'a> {
+    agent: &'a ureq::Agent,
+    homebrew: Option<&'a (String, Vec<String>)>,
+    crates: &'a str,
+    pypi: &'a str,
+    npm: &'a str,
+    raw_github: &'a str,
+}
+
+impl<'a> Registries<'a> {
+    fn live(agent: &'a ureq::Agent, homebrew: Option<&'a (String, Vec<String>)>) -> Self {
+        Registries {
+            agent,
+            homebrew,
+            crates: checkers::CRATES_IO,
+            pypi: checkers::PYPI,
+            npm: checkers::NPM,
+            raw_github: checkers::RAW_GITHUB,
+        }
+    }
+}
+
 /// Decide what one install needs: what would bring it to the target version,
 /// and whether the registry can serve that yet. Nothing here changes anything.
-fn decide(
-    agent: &ureq::Agent,
-    root: &Path,
-    install: &Install,
-    version: &str,
-    homebrew: Option<&(String, Vec<String>)>,
-) -> Decision {
+fn decide(registries: &Registries<'_>, root: &Path, install: &Install, version: &str) -> Decision {
     let commands = match plan(install, version, root) {
         Planned::AlreadyCurrent => return Decision::AlreadyCurrent,
         Planned::Skip(reason) => return Decision::Skip(reason),
         Planned::Install(commands) => commands,
     };
-    // A registry that does not serve the target version yet turns an install
-    // into a silent downgrade-to-current: `cargo install <crate> --force`
-    // reinstalls whatever is published and exits 0.
-    match registry_gap(agent, install, version, homebrew) {
+    // Homebrew cannot be told which version to install, so `brew upgrade`
+    // against a tap that has not caught up is a silent no-op reported as a
+    // success. Asking first is the only way to tell that apart from an update.
+    // The pinned forms the other managers use fail loudly instead, and their
+    // failure is judged in `attempt_install` rather than here.
+    match registries.gap(install, version) {
         Some(detail) => Decision::Wait(detail, commands),
         None => Decision::Run(commands),
     }
@@ -227,6 +261,7 @@ fn hold(dry_run: bool, decisions: &[Decision]) -> Option<Hold> {
 /// behind. The manager is the authority on the version it installed; no binary
 /// is executed to ask.
 fn carry_out(
+    registries: &Registries<'_>,
     install: &Install,
     package: &Package,
     version: &str,
@@ -244,7 +279,7 @@ fn carry_out(
         commands,
     };
 
-    let commands = match decision {
+    let mut commands = match decision {
         Decision::AlreadyCurrent => {
             let mut report = row(Action::AlreadyCurrent, None, Vec::new());
             report.after = Some(install.version.clone());
@@ -265,11 +300,19 @@ fn carry_out(
         return (row(Action::Planned, detail, commands), None);
     }
 
-    for argv in &commands {
-        crate::output::print_step(&argv.join(" "));
-        if let Err(e) = managers::execute(argv, output.is_json()) {
-            return (row(Action::Failed, Some(e.to_string()), commands), None);
+    let run = |argv: &[Vec<String>]| -> std::result::Result<(), String> {
+        for argv in argv {
+            crate::output::print_step(&argv.join(" "));
+            if let Err(e) = managers::execute(argv, output.is_json()) {
+                return Err(e.to_string());
+            }
         }
+        Ok(())
+    };
+    if let Some((action, detail)) = attempt_install(install, version, &mut commands, run, || {
+        registries.gap(install, version)
+    }) {
+        return (row(action, Some(detail), commands), None);
     }
 
     match managers::probe(install.manager, package) {
@@ -302,36 +345,94 @@ fn carry_out(
     }
 }
 
-/// Ask the registry the same question `verify` asks, before running anything.
-/// Any answer other than "the target version is live" means waiting is the
-/// right response, including a network error, so all of them report a gap.
-fn registry_gap(
-    agent: &ureq::Agent,
+/// Install one manager's package, and judge the outcome when it does not
+/// complete. None means the commands ran; anything else is the row they earned.
+///
+/// A failed install is not automatically the operator's problem. Every pinned
+/// form in `install_commands` fails loudly and changes nothing when the index
+/// cannot resolve the version, which describes a release still propagating far
+/// more often than a broken machine. Reporting that as a general error tells
+/// the caller that retrying cannot help, which is both wrong and the one thing
+/// that stops `tarry cmd -- vership update-local` from closing the release on
+/// its own.
+///
+/// So the failure is judged rather than assumed. A manager with a
+/// cache-bypassing form gets exactly one more attempt, which separates a stale
+/// local index from a registry that has genuinely not served the version yet;
+/// then the index the installer resolves against decides. Not finding the
+/// version there is `pending`, which exits `unpublished` and retryable. Finding
+/// it leaves no reading under which waiting helps, so that stays a failure.
+///
+/// `run` executes a command list, erroring with the message of the first
+/// failure. `gap` describes why the registry cannot serve this version, or None
+/// when it can; both are injected so the judgement is testable without a
+/// registry.
+fn attempt_install(
     install: &Install,
     version: &str,
-    homebrew: Option<&(String, Vec<String>)>,
-) -> Option<String> {
-    use crate::verify::CheckResult;
-
-    let name = &install.package;
-    let result = match install.manager {
-        // A path install builds the working tree, which no registry speaks for.
-        Manager::Cargo if matches!(install.source, Source::Path(_)) => return None,
-        Manager::Cargo => checkers::crates(agent, checkers::CRATES_IO, name, version),
-        Manager::Uv => checkers::pypi(agent, checkers::PYPI, name, version),
-        Manager::Npm => checkers::npm(agent, checkers::NPM, name, version),
-        Manager::Brew => {
-            let (tap, formulas) = homebrew?;
-            checkers::homebrew(agent, checkers::RAW_GITHUB, tap, formulas, version)
-        }
+    commands: &mut Vec<Vec<String>>,
+    mut run: impl FnMut(&[Vec<String>]) -> std::result::Result<(), String>,
+    gap: impl FnOnce() -> Option<String>,
+) -> Option<(Action, String)> {
+    let mut detail = match run(commands) {
+        Ok(()) => return None,
+        Err(detail) => detail,
     };
-    match result {
-        CheckResult::Found(_) => None,
-        CheckResult::FoundOld(found) => {
-            Some(format!("registry serves {found}, waiting for {version}"))
+    if let Some(retry) = managers::retry_commands(install, version) {
+        // Reported as part of this install, because it ran as part of it.
+        commands.extend(retry.iter().cloned());
+        match run(&retry) {
+            Ok(()) => return None,
+            Err(retried) => detail = retried,
         }
-        CheckResult::NotFound => Some(format!("{version} is not published yet")),
-        CheckResult::Error(e) => Some(format!("registry check failed: {e}")),
+    }
+    match gap() {
+        Some(gap) => Some((Action::Pending, gap)),
+        None => Some((Action::Failed, detail)),
+    }
+}
+
+impl Registries<'_> {
+    /// Whether the registry cannot serve this version yet, described.
+    ///
+    /// The question is the installer's, not `verify`'s: each manager is asked
+    /// about the document its own resolver reads, because a registry that
+    /// serves more than one view of itself can have them disagree. PyPI is the
+    /// case in point, publishing the JSON API and the simple index as
+    /// separately cached documents; only the second decides whether `uv tool
+    /// install` resolves, so only the second is worth asking here.
+    ///
+    /// Any answer other than "the target version is there" means waiting is the
+    /// right response, including a network error, so all of them report a gap.
+    fn gap(&self, install: &Install, version: &str) -> Option<String> {
+        use crate::verify::CheckResult;
+
+        let name = &install.package;
+        let result = match install.manager {
+            // A path install builds the working tree, which no registry speaks
+            // for. Its failures are the operator's, never a pending release.
+            Manager::Cargo if matches!(install.source, Source::Path(_)) => return None,
+            Manager::Cargo => checkers::crates(self.agent, self.crates, name, version),
+            Manager::Uv => checkers::pypi_simple(
+                self.agent,
+                self.pypi,
+                &managers::normalize_pypi(name),
+                version,
+            ),
+            Manager::Npm => checkers::npm(self.agent, self.npm, name, version),
+            Manager::Brew => {
+                let (tap, formulas) = self.homebrew?;
+                checkers::homebrew(self.agent, self.raw_github, tap, formulas, version)
+            }
+        };
+        match result {
+            CheckResult::Found(_) => None,
+            CheckResult::FoundOld(found) => {
+                Some(format!("registry serves {found}, waiting for {version}"))
+            }
+            CheckResult::NotFound => Some(format!("{version} is not published yet")),
+            CheckResult::Error(e) => Some(format!("registry check failed: {e}")),
+        }
     }
 }
 
@@ -585,8 +686,13 @@ mod tests {
         let package = Package::Named("rumdl".to_string());
         let commands = vec![vec!["cargo".to_string(), "install".to_string()]];
         let output = OutputConfig::new(crate::cli::OutputFormat::Json, false);
+        // A hold returns before anything is run or asked, so nothing here
+        // reaches a registry.
+        let agent = checkers::default_agent();
+        let registries = Registries::live(&agent, None);
 
         let (report, after) = carry_out(
+            &registries,
             &install,
             &package,
             "0.2.48",
@@ -601,6 +707,7 @@ mod tests {
 
         // A dry run holds the same way, and says nothing about other managers.
         let (report, _) = carry_out(
+            &registries,
             &install,
             &package,
             "0.2.48",
@@ -610,6 +717,171 @@ mod tests {
         );
         assert_eq!(report.action, Action::Planned);
         assert_eq!(report.detail, None);
+    }
+
+    #[test]
+    fn the_uv_pre_flight_reads_the_index_uv_resolves_against() {
+        use httpmock::{Method::GET, MockServer};
+
+        // PyPI serves the simple index and the JSON API as separately cached
+        // documents, so only the first speaks for whether `uv tool install`
+        // will resolve. This server answers both, and disagrees: the JSON API
+        // has the version and the simple index does not. Whichever document
+        // the check reads decides the verdict, so the verdict names it.
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/simple/my-pkg/");
+            then.status(200).json_body(serde_json::json!({
+                "meta": {"api-version": "1.1"},
+                "name": "my-pkg",
+                "versions": ["0.2.47"],
+                "files": [],
+            }));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/pypi/My_Pkg/0.2.48/json");
+            then.status(200)
+                .json_body(serde_json::json!({"info": {"version": "0.2.48"}}));
+        });
+
+        let agent = checkers::default_agent();
+        let base = server.base_url();
+        let registries = Registries {
+            agent: &agent,
+            homebrew: None,
+            crates: &base,
+            pypi: &base,
+            npm: &base,
+            raw_github: &base,
+        };
+        // The name is asked for as PEP 503 normalizes it, because that is the
+        // only spelling the simple index answers to.
+        let mut uv = install(Manager::Uv, "0.2.47", Source::Registry);
+        uv.package = "My_Pkg".to_string();
+        assert_eq!(
+            registries.gap(&uv, "0.2.48"),
+            Some("0.2.48 is not published yet".to_string()),
+            "the JSON API answer must not be what decides this"
+        );
+        // The positive control, from the same server: a version the simple
+        // index does list leaves no gap.
+        assert_eq!(registries.gap(&uv, "0.2.47"), None);
+    }
+
+    /// Drive `attempt_install` with a scripted run: each entry is the failure
+    /// message for one command list, or None for a list that succeeds.
+    fn attempt(
+        install: &Install,
+        outcomes: &[Option<&str>],
+        gap: Option<&str>,
+    ) -> (Option<(Action, String)>, Vec<Vec<String>>) {
+        let mut commands = managers::install_commands(install, "0.2.48");
+        let mut outcomes = outcomes.iter();
+        let outcome = attempt_install(
+            install,
+            "0.2.48",
+            &mut commands,
+            |_| match outcomes
+                .next()
+                .expect("attempt_install ran more command lists than the test scripted")
+            {
+                Some(failure) => Err(failure.to_string()),
+                None => Ok(()),
+            },
+            || gap.map(str::to_string),
+        );
+        (outcome, commands)
+    }
+
+    #[test]
+    fn an_install_that_cannot_resolve_the_version_is_pending_not_failed() {
+        // The shape of a release still propagating: the install fails, the
+        // retry fails, and the index the installer reads does not have it.
+        // Calling that a general error tells the caller retrying cannot help.
+        let uv = install(Manager::Uv, "0.2.47", Source::Registry);
+        let (outcome, commands) = attempt(
+            &uv,
+            &[Some("exited with 1"), Some("exited with 1")],
+            Some("0.2.48 is not published yet"),
+        );
+        assert_eq!(
+            outcome,
+            Some((Action::Pending, "0.2.48 is not published yet".to_string()))
+        );
+        assert_eq!(commands.len(), 2, "the retry ran, so it is reported");
+        assert!(
+            commands[1].contains(&"--no-cache".to_string()),
+            "{commands:?}"
+        );
+        assert_eq!(
+            verdict(&[report(Manager::Uv, Action::Pending)], &[], "0.2.48")
+                .unwrap_err()
+                .exit_code(),
+            8
+        );
+
+        // The negative control: the same two failures against an index that
+        // does serve the version leave no reading under which waiting helps.
+        let (outcome, _) = attempt(
+            &uv,
+            &[Some("exited with 1"), Some("postinstall crashed")],
+            None,
+        );
+        assert_eq!(
+            outcome,
+            Some((Action::Failed, "postinstall crashed".to_string())),
+            "the last failure is what gets reported"
+        );
+    }
+
+    #[test]
+    fn a_retry_that_succeeds_completes_the_install() {
+        let uv = install(Manager::Uv, "0.2.47", Source::Registry);
+        // A stale local index: the first attempt cannot resolve, the
+        // cache-bypassed one can. Nothing is reported as pending or failed,
+        // and the gap check is never consulted.
+        let (outcome, commands) = attempt(&uv, &[Some("exited with 1"), None], Some("unused"));
+        assert_eq!(outcome, None);
+        assert_eq!(commands.len(), 2, "the retry ran, so it is reported");
+    }
+
+    #[test]
+    fn a_manager_with_no_cache_to_bypass_is_judged_on_its_first_attempt() {
+        // cargo gets one attempt, so the scripted run holding a single outcome
+        // is itself the assertion: a second call panics.
+        let cargo = install(Manager::Cargo, "0.2.47", Source::Registry);
+        let (outcome, commands) =
+            attempt(&cargo, &[Some("exited with 101")], Some("not published"));
+        assert_eq!(
+            outcome,
+            Some((Action::Pending, "not published".to_string()))
+        );
+        assert_eq!(
+            commands.len(),
+            1,
+            "nothing was retried, so nothing is added"
+        );
+    }
+
+    #[test]
+    fn a_build_failure_of_this_working_tree_is_never_pending() {
+        // A path install has no registry behind it, so `gap` reports none and
+        // the failure stays the operator's however many times it is retried.
+        let here = std::env::current_dir().unwrap();
+        let path = install(Manager::Cargo, "0.2.47", Source::Path(here));
+        let (outcome, _) = attempt(&path, &[Some("could not compile rumdl")], None);
+        assert_eq!(
+            outcome,
+            Some((Action::Failed, "could not compile rumdl".to_string()))
+        );
+    }
+
+    #[test]
+    fn an_install_that_completes_first_time_reports_nothing_and_adds_nothing() {
+        let uv = install(Manager::Uv, "0.2.47", Source::Registry);
+        let (outcome, commands) = attempt(&uv, &[None], Some("unused"));
+        assert_eq!(outcome, None);
+        assert_eq!(commands, managers::install_commands(&uv, "0.2.48"));
     }
 
     #[test]
