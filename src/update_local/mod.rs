@@ -585,18 +585,30 @@ fn verdict(reports: &[InstallReport], binaries: &[BinaryReport], version: &str) 
         let Some(winner) = binary.winner() else {
             continue;
         };
-        if winner.version.as_deref() != Some(version) {
-            let owner = match (winner.manager, &winner.version) {
-                (Some(manager), Some(found)) => format!("{} {found}", manager.name()),
-                (Some(manager), None) => manager.name().to_string(),
-                (None, _) => "an unmanaged copy".to_string(),
-            };
-            return Err(Error::Other(format!(
-                "{} on PATH is {} ({owner}), not {version}",
-                binary.name,
-                winner.path.display()
-            )));
+        if winner.version.as_deref() == Some(version) {
+            continue;
         }
+        let name = &binary.name;
+        let path = winner.path.display();
+        // A version nothing on this machine can read is not evidence of the
+        // wrong version, and "not <version>" asserts exactly that. An unmanaged
+        // copy is still the failure being reported whatever it holds: it was
+        // put there by hand, so no manager moves it on the next release and
+        // this check is the only thing that will ever mention it again.
+        let message = match (winner.manager, &winner.version) {
+            (Some(manager), Some(found)) => format!(
+                "{name} on PATH is {path} ({} {found}), not {version}",
+                manager.name()
+            ),
+            (Some(manager), None) => format!(
+                "{name} on PATH is {path} ({}), whose version cannot be read to confirm {version}",
+                manager.name()
+            ),
+            (None, _) => {
+                format!("{name} on PATH is {path}, an unmanaged copy no manager keeps at {version}")
+            }
+        };
+        return Err(Error::Other(message));
     }
     Ok(())
 }
@@ -1111,6 +1123,43 @@ mod tests {
         ])];
         let err = verdict(&reports, &binaries, "0.2.48").unwrap_err();
         assert!(err.to_string().contains("unmanaged"), "{err}");
+    }
+
+    #[test]
+    fn an_unmanaged_copy_is_never_said_to_be_the_wrong_version() {
+        // No manager owns an unmanaged copy, so nothing can report its version
+        // without executing it and the report carries None. Saying "not X" of
+        // it is an unknowable claim, and a hand-placed copy that happens to be
+        // X makes it a false one. It stays a failure either way: no manager
+        // will move that file on the next release.
+        let reports = vec![report(Manager::Cargo, Action::Updated)];
+        let binaries = vec![binary(vec![("/home/u/.local/bin/rumdl", None, None)])];
+        let err = verdict(&reports, &binaries, "0.2.48")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !err.contains("not 0.2.48"),
+            "an unreadable version must not be asserted to differ: {err}"
+        );
+        assert!(
+            err.contains("unmanaged") && err.contains("/home/u/.local/bin/rumdl"),
+            "the copy must still be named as the failure: {err}"
+        );
+
+        // The other bound: a version that IS readable and does differ is still
+        // stated as the plain fact it is.
+        let managed = vec![binary(vec![(
+            "/home/u/.cargo/bin/rumdl",
+            Some(Manager::Cargo),
+            Some("0.2.29"),
+        )])];
+        let err = verdict(&reports, &managed, "0.2.48")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("cargo 0.2.29") && err.contains("not 0.2.48"),
+            "a known version that differs is exactly what this may claim: {err}"
+        );
     }
 
     #[test]
