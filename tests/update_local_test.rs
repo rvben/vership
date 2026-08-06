@@ -642,58 +642,87 @@ fn an_unmanaged_copy_ahead_of_the_updated_one_fails() {
 }
 
 #[test]
-fn a_shadowed_copy_is_only_judged_once_the_installs_have_run() {
+fn a_shadowed_copy_is_judged_as_soon_as_no_install_can_reach_it() {
     let root = project("vership-e2e-demo", "0.2.0");
     let unmanaged = TempDir::new().unwrap();
     write_executable(unmanaged.path(), "vership-e2e-demo");
 
-    let run = |home: &Path, args: &[&str]| {
+    // `ahead` is a directory placed before the install's own on PATH, holding a
+    // copy no manager owns.
+    let run = |home: &Path, ahead: Option<&Path>, args: &[&str]| {
         let bin_dir = home.join("bin");
         write_executable(&bin_dir, "vership-e2e-demo");
+        let mut dirs: Vec<&Path> = Vec::new();
+        dirs.extend(ahead);
+        dirs.push(bin_dir.as_path());
         AssertCommand::cargo_bin("vership")
             .unwrap()
             .current_dir(root.path())
             .env("CARGO_HOME", home)
             .env_remove("CARGO_INSTALL_ROOT")
-            .env("PATH", path_with(&[unmanaged.path(), &bin_dir]))
+            .env("PATH", path_with(&dirs))
             .arg("update-local")
             .args(args)
             .output()
             .expect("vership runs")
     };
 
-    // An install one version behind, under --dry-run: nothing has been
-    // installed, so the copy that currently wins PATH is the plan's input.
     let outstanding = cargo_home(&[path_entry(
         "vership-e2e-demo",
         "0.1.0",
         root.path(),
         "vership-e2e-demo",
     )]);
+
+    // An install one version behind, under --dry-run, with a hand-placed copy
+    // ahead of it. `cargo install` writes into its own directory and cannot
+    // touch that file, so the shadow is decided before the install runs and
+    // stays decided whichever way it goes. Waiting for the install to settle
+    // answers `ok` to a question whose answer is already no.
     let output = run(
         outstanding.path(),
+        Some(unmanaged.path()),
+        &["--dry-run", "--managers", "cargo", "-o", "text"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout.contains("FAIL vership-e2e-demo"),
+        "a shadow no install can reach is judged now: {stdout}"
+    );
+
+    // The other bound, and why this is not simply "always judge": the same
+    // outstanding install, with its own copy winning PATH. That file is the one
+    // the install is about to rewrite, so a run that has not tried cannot have
+    // failed at it.
+    let output = run(
+        outstanding.path(),
+        None,
         &["--dry-run", "--managers", "cargo", "-o", "text"],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
         !stdout.contains("FAIL"),
-        "a run that has not tried cannot have failed: {stdout}"
+        "a copy the pending install replaces stays unjudged: {stdout}"
     );
     assert!(
         stdout.contains("wait vership-e2e-demo"),
         "the unjudged copy is still reported: {stdout}"
     );
 
-    // The control: with the install already at the target, nothing is
-    // outstanding and the same shadowing is judged.
+    // And with nothing outstanding at all, the shadowing is judged as before.
     let settled = cargo_home(&[path_entry(
         "vership-e2e-demo",
         "0.2.0",
         root.path(),
         "vership-e2e-demo",
     )]);
-    let output = run(settled.path(), &["--managers", "cargo", "-o", "text"]);
+    let output = run(
+        settled.path(),
+        Some(unmanaged.path()),
+        &["--managers", "cargo", "-o", "text"],
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert!(

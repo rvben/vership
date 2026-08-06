@@ -128,7 +128,7 @@ pub fn run(
             dry_run,
             installs: &reports,
             binaries: &binaries,
-            settled: settled(&reports),
+            outstanding: &outstanding_managers(&reports),
             considered: &considered,
         },
         output,
@@ -546,9 +546,9 @@ fn binary_names(installs: &[Install], cargo: &[targets::CargoLocalPackage]) -> V
 /// The exit condition.
 ///
 /// A failed install outranks a lagging registry: both leave the machine off the
-/// target version, but only the first needs a human. Shadowing is judged only
-/// once nothing is outstanding, because an install that has not run yet is
-/// legitimately not at the target version.
+/// target version, but only the first needs a human. Shadowing is judged per
+/// binary, once no outstanding install can still change what `$PATH` resolves
+/// to for it.
 fn verdict(reports: &[InstallReport], binaries: &[BinaryReport], version: &str) -> Result<()> {
     let failed: Vec<String> = reports
         .iter()
@@ -577,14 +577,18 @@ fn verdict(reports: &[InstallReport], binaries: &[BinaryReport], version: &str) 
         )));
     }
 
-    if !settled(reports) {
-        return Ok(());
-    }
+    let outstanding = outstanding_managers(reports);
 
     for binary in binaries {
         let Some(winner) = binary.winner() else {
             continue;
         };
+        if outstanding
+            .iter()
+            .any(|manager| may_still_change(binary, *manager))
+        {
+            continue;
+        }
         if winner.version.as_deref() == Some(version) {
             continue;
         }
@@ -613,14 +617,39 @@ fn verdict(reports: &[InstallReport], binaries: &[BinaryReport], version: &str) 
     Ok(())
 }
 
-/// Whether every install has reached its final state, so what `$PATH` resolves
-/// to now is this run's outcome rather than its input. An outstanding install
-/// leaves the copies on `$PATH` unjudged, in the report as well as the exit
-/// code: a run that has not tried to change something cannot have failed at it.
-fn settled(reports: &[InstallReport]) -> bool {
-    !reports
+/// Whether an install by `manager`, not yet carried out, could still change
+/// which copy of `binary` wins `$PATH`.
+///
+/// An install rewrites the files its own manager owns. So a manager that owns
+/// the winning copy will replace that very file, and one that owns no copy of
+/// this binary at all installs somewhere no copy here can place, possibly ahead
+/// of the winner. Owning only a shadowed copy is neither: rewriting a file that
+/// already loses `$PATH` leaves the winner exactly as it is.
+///
+/// That last case is the one worth naming, because it reads as a pass. A copy
+/// placed by hand in a directory no manager installs into is never what a
+/// pending install will fix, so deferring to that install hides a shadow that
+/// no run will resolve, and `--dry-run` reports `ok` where the real run reports
+/// a failure on the same machine.
+pub(super) fn may_still_change(binary: &BinaryReport, manager: Manager) -> bool {
+    if binary.winner().and_then(|copy| copy.manager) == Some(manager) {
+        return true;
+    }
+    !binary
+        .copies
         .iter()
-        .any(|r| matches!(r.action, Action::Failed | Action::Pending | Action::Planned))
+        .any(|copy| copy.manager == Some(manager))
+}
+
+/// The managers whose install has not reached its final state, and so may still
+/// change what `$PATH` resolves to. Shared by the exit code and the rendered
+/// output so a binary cannot be marked one way and judged the other.
+pub(super) fn outstanding_managers(reports: &[InstallReport]) -> Vec<Manager> {
+    reports
+        .iter()
+        .filter(|r| matches!(r.action, Action::Failed | Action::Pending | Action::Planned))
+        .map(|r| r.manager)
+        .collect()
 }
 
 /// Parse `--managers` / `--skip` into the managers to probe.
@@ -1173,6 +1202,44 @@ mod tests {
             Some("0.2.29"),
         )])];
         assert!(verdict(&reports, &binaries, "0.2.48").is_ok());
+    }
+
+    #[test]
+    fn an_outstanding_install_defers_only_the_binaries_it_could_change() {
+        // A pending cargo install rewrites the copy cargo owns. It cannot move
+        // a hand-placed file in a directory cargo never installs into, so the
+        // shadow below is already decided and stays decided however the install
+        // goes. Deferring it made --dry-run answer `ok` where the real run on
+        // the same machine answered with this very failure.
+        let reports = vec![report(Manager::Cargo, Action::Planned)];
+        let unreachable = vec![binary(vec![
+            ("/home/u/.local/bin/rumdl", None, None),
+            (
+                "/home/u/.cargo/bin/rumdl",
+                Some(Manager::Cargo),
+                Some("0.2.29"),
+            ),
+        ])];
+        let err = verdict(&reports, &unreachable, "0.2.48")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("/home/u/.local/bin/rumdl"),
+            "the copy the pending install cannot reach must be judged now: {err}"
+        );
+
+        // The other bound, and the reason this is not simply "always judge":
+        // here the pending install owns the copy that wins, so it is about to
+        // rewrite the very file whose version is wrong.
+        let reachable = vec![binary(vec![(
+            "/home/u/.cargo/bin/rumdl",
+            Some(Manager::Cargo),
+            Some("0.2.29"),
+        )])];
+        assert!(
+            verdict(&reports, &reachable, "0.2.48").is_ok(),
+            "a copy the pending install is about to replace must stay unjudged"
+        );
     }
 
     #[test]

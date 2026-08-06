@@ -15,9 +15,9 @@ pub struct Report<'a> {
     pub dry_run: bool,
     pub installs: &'a [InstallReport],
     pub binaries: &'a [BinaryReport],
-    /// Whether every install has reached its final state. An outstanding one
-    /// leaves the copies on `$PATH` reported without a verdict.
-    pub settled: bool,
+    /// The managers whose install has not reached its final state. A copy such
+    /// a manager may still replace is reported without a verdict.
+    pub outstanding: &'a [Manager],
     /// What each manager was asked about, whether or not it held anything.
     pub considered: &'a [(Manager, Vec<String>)],
 }
@@ -104,7 +104,7 @@ fn render_text(report: &Report<'_>) {
         dry_run,
         installs,
         binaries,
-        settled,
+        outstanding,
         considered,
         ..
     } = *report;
@@ -139,12 +139,14 @@ fn render_text(report: &Report<'_>) {
         let (mark, detail) = match b.winner() {
             None => ("warn", "not on PATH".to_string()),
             Some(c) => {
-                // With an install still outstanding this line is the starting
-                // state, not the result, so it is reported without a verdict.
-                let mark = match (settled, c.version.as_deref() == Some(version)) {
-                    (false, _) => "wait",
-                    (true, true) => "ok  ",
-                    (true, false) => "FAIL",
+                // While an install that could replace this copy is outstanding,
+                // the line is the starting state rather than the result, so it
+                // is reported without a verdict.
+                let deferred = outstanding.iter().any(|m| super::may_still_change(b, *m));
+                let mark = match (deferred, c.version.as_deref() == Some(version)) {
+                    (true, _) => "wait",
+                    (false, true) => "ok  ",
+                    (false, false) => "FAIL",
                 };
                 (mark, format!("{} ({})", c.path.display(), describe(c)))
             }
