@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.17](https://github.com/rvben/vership/compare/v0.5.16...v0.5.17) - 2026-08-06
+
+### Fixed
+
+- **update-local**: judge a shadow no outstanding install can reach ([5ce2a04](https://github.com/rvben/vership/commit/5ce2a04b7cc724092863dc2d189fed989e49101a))
+
 ## [0.5.16](https://github.com/rvben/vership/compare/v0.5.15...v0.5.16) - 2026-08-06
 
 ### Fixed
