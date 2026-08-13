@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.18](https://github.com/rvben/vership/compare/v0.5.17...v0.5.18) - 2026-08-13
+
+### Fixed
+
+- **verify**: detect PyPI from what the release publishes ([a0feeac](https://github.com/rvben/vership/commit/a0feeacc4db63489896f16e0f47a28b2fb7657b2))
+
 ## [0.5.17](https://github.com/rvben/vership/compare/v0.5.16...v0.5.17) - 2026-08-06
 
 ### Fixed
