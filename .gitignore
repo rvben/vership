@@ -1,6 +1,7 @@
 /target
 
 # Agent config and internal design docs and scratch: never committed or published
+/CLAUDE.local.md
 /.claude/
 /.superpowers/
 /docs/superpowers/
