@@ -126,6 +126,8 @@ pub enum Command {
     Config(ConfigCommand),
     /// Print JSON schema for agent integration
     Schema,
+    /// Describe offline-safe CLI capabilities
+    Capabilities,
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for

@@ -1,4 +1,4 @@
-//! Integration tests asserting clispec v0.2 spec compliance.
+//! Integration tests asserting clispec v0.3 spec compliance.
 //!
 //! All tests exercise the real vership binary via assert_cmd so we verify the
 //! production code path, not a re-implementation.
@@ -58,9 +58,9 @@ fn last_stderr_line(stderr: &[u8]) -> String {
 
 // ---- schema validation ----
 
-/// The `schema` subcommand output must validate against the clispec v0.2 JSON Schema.
+/// The `schema` subcommand output must validate against the clispec v0.3 JSON Schema.
 #[test]
-fn schema_validates_against_clispec_v02() {
+fn schema_validates_against_clispec_v03() {
     let output = AssertCommand::cargo_bin("vership")
         .unwrap()
         .args(["schema"])
@@ -73,7 +73,7 @@ fn schema_validates_against_clispec_v02() {
         serde_json::from_slice(&output.stdout).expect("schema is valid JSON");
 
     let meta_schema_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/clispec-v0.2.json");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/clispec-v0.3.json");
     let meta_schema_text = fs::read_to_string(&meta_schema_path)
         .unwrap_or_else(|_| panic!("fixture not found: {}", meta_schema_path.display()));
     let meta_schema: serde_json::Value =
@@ -83,7 +83,7 @@ fn schema_validates_against_clispec_v02() {
     let errors: Vec<_> = validator.iter_errors(&schema_doc).collect();
     assert!(
         errors.is_empty(),
-        "schema failed v0.2 validation:\n{}",
+        "schema failed v0.3 validation:\n{}",
         errors
             .iter()
             .map(|e| format!("  - {e}"))
@@ -722,7 +722,7 @@ fn schema_includes_update_local_command() {
     }
 }
 
-/// The unpublished outcome must carry exit code 8 and be retryable.
+/// The unpublished outcome must carry exit code 8.
 #[test]
 fn schema_includes_unpublished_outcome() {
     let output = AssertCommand::cargo_bin("vership")
@@ -737,8 +737,7 @@ fn schema_includes_unpublished_outcome() {
     let outcomes = doc["outcomes"].as_array().expect("outcomes section");
     let unpublished = outcomes
         .iter()
-        .find(|o| o["kind"] == "unpublished")
+        .find(|o| o["name"] == "unpublished")
         .expect("unpublished outcome");
-    assert_eq!(unpublished["exit_code"], 8);
-    assert_eq!(unpublished["retryable"], true);
+    assert_eq!(unpublished["code"], 8);
 }

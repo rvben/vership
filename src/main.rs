@@ -62,6 +62,27 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             );
             Ok(())
         }
+        Command::Capabilities => {
+            let capabilities = serde_json::json!({
+                "name": "vership",
+                "version": env!("CARGO_PKG_VERSION"),
+                "clispec": "0.3",
+                "output": ["text", "json"],
+                "features": ["schema", "dry-run releases", "release verification", "shell completions"]
+            });
+            if output.is_json() {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&capabilities).expect("serialize")
+                );
+            } else {
+                println!(
+                    "vership {} - clispec 0.3; text/json output, dry-run releases, verification",
+                    env!("CARGO_PKG_VERSION")
+                );
+            }
+            Ok(())
+        }
         Command::Completions { shell } => {
             use clap::CommandFactory;
             use clap_complete::generate;
