@@ -89,6 +89,8 @@ struct Pyproject {
 #[derive(Deserialize)]
 struct PyprojectProject {
     name: Option<String>,
+    version: Option<String>,
+    dynamic: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -299,16 +301,129 @@ fn auto_bin(path: &Path) -> Option<(PathBuf, String)> {
     (path.extension()? == "rs").then_some((path.to_path_buf(), name))
 }
 
-/// Read the distribution name from pyproject.toml.
-pub(crate) fn pypi_project_name(root: &Path) -> Result<Option<String>> {
-    let path = root.join("pyproject.toml");
+/// Where a Python distribution's version comes from, which is what decides
+/// whether it belongs to the release being verified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DistVersion {
+    /// Declared `dynamic`, so the build computes it - in practice from the tag
+    /// being released.
+    FromBuild,
+    /// Written in the manifest, and so on its own release line unless it
+    /// happens to equal the version being released.
+    Pinned(String),
+}
+
+/// A Python distribution declared by one `pyproject.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Distribution {
+    pub name: String,
+    pub version: DistVersion,
+}
+
+/// Read the distribution a `pyproject.toml` declares. A file that names no
+/// distribution (a tooling-only manifest carrying just `[tool.*]` tables)
+/// declares nothing to publish.
+fn read_distribution(path: &Path) -> Result<Option<Distribution>> {
     if !path.exists() {
         return Ok(None);
     }
-    let content = std::fs::read_to_string(&path)?;
+    let content = std::fs::read_to_string(path)?;
     let pyproject: Pyproject = toml::from_str(&content)
-        .map_err(|e| Error::Config(format!("parse pyproject.toml: {e}")))?;
-    Ok(pyproject.project.and_then(|p| p.name))
+        .map_err(|e| Error::Config(format!("parse {}: {e}", path.display())))?;
+    let Some(project) = pyproject.project else {
+        return Ok(None);
+    };
+    let Some(name) = project.name else {
+        return Ok(None);
+    };
+    let dynamic = project
+        .dynamic
+        .unwrap_or_default()
+        .iter()
+        .any(|field| field == "version");
+    let version = match project.version {
+        Some(v) if !dynamic => DistVersion::Pinned(v),
+        _ => DistVersion::FromBuild,
+    };
+    Ok(Some(Distribution { name, version }))
+}
+
+/// Read the distribution name from pyproject.toml.
+pub(crate) fn pypi_project_name(root: &Path) -> Result<Option<String>> {
+    Ok(read_distribution(&root.join("pyproject.toml"))?.map(|d| d.name))
+}
+
+/// How deep below the root a packaged distribution's manifest is looked for.
+/// `packaging/python/pyproject.toml` is the shape this exists for; the limit
+/// keeps the scan off the deep trees that sample apps and benchmark fixtures
+/// live in.
+const PACKAGING_SCAN_DEPTH: usize = 3;
+
+/// Whether a directory can hold a manifest of something this repo publishes.
+/// Hidden directories are where worktrees keep entire second copies of the
+/// tree, and scanning one yields the same distribution again from another
+/// checkout. The rest are build output and test material: never the source of
+/// a published distribution.
+fn is_scannable(name: &str) -> bool {
+    const NEVER: [&str; 10] = [
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        "venv",
+        "vendor",
+        "__pycache__",
+        "site-packages",
+        "tests",
+        "fixtures",
+    ];
+    !name.starts_with('.') && !NEVER.contains(&name)
+}
+
+/// Python distributions this repo packages below its root, nearest first.
+///
+/// The root's own manifest is not included: it is read directly, and is a
+/// target whether or not anything else says the repo publishes.
+fn packaged_distributions(root: &Path, max_depth: usize) -> Result<Vec<Distribution>> {
+    let mut found = Vec::new();
+    let mut frontier = vec![root.to_path_buf()];
+    for _ in 0..max_depth {
+        let mut next = Vec::new();
+        for dir in frontier {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            // Directory order is not stable across filesystems, and this list
+            // decides the order targets are reported in.
+            let mut dirs: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(is_scannable)
+                })
+                .collect();
+            dirs.sort();
+            for dir in dirs {
+                if let Some(dist) = read_distribution(&dir.join("pyproject.toml"))? {
+                    found.push(dist);
+                }
+                next.push(dir);
+            }
+        }
+        frontier = next;
+    }
+    Ok(found)
+}
+
+/// Whether a workflow publishes to PyPI. This is the same kind of evidence the
+/// ghcr and Homebrew targets are detected from: what the release actually does,
+/// rather than what the root of the repo happens to declare.
+fn publishes_to_pypi(workflows: &str) -> bool {
+    const MARKERS: [&str; 3] = ["pypa/gh-action-pypi-publish", "twine upload", "uv publish"];
+    MARKERS.iter().any(|marker| workflows.contains(marker))
 }
 
 /// Read the package name from package.json. A private package is never
@@ -367,11 +482,18 @@ fn workflows_content(root: &Path) -> String {
 /// and never adds a GitHub Release or any registry target inferred from
 /// incidental package metadata (a tooling-only `pyproject.toml`, a companion
 /// `Cargo.toml`, etc.).
+///
+/// `version` is the release being verified. It decides which packaged-in-a-
+/// subdirectory distributions belong to this release: one pinned to a version
+/// of its own is a separately-versioned companion, not part of it. A caller
+/// with no release in hand (`update_local`, which only wants the Homebrew
+/// target) passes None and gets only the packages that need no such judgement.
 pub fn detect_targets(
     root: &Path,
     config: &VerifyConfig,
     remote_url: Option<&str>,
     tag_only: bool,
+    version: Option<&str>,
 ) -> Result<Vec<Target>> {
     let github = remote_url.and_then(owner_repo);
     let mut targets = Vec::new();
@@ -405,7 +527,27 @@ pub fn detect_targets(
         targets.push(Target::Crates { name: cargo.name });
     }
 
-    if let Some(name) = pypi_project_name(root)? {
+    let workflows = workflows_content(root);
+
+    // The root manifest is this project's own distribution and stands on its
+    // own. Anything packaged below the root is only a release target when the
+    // release actually publishes to PyPI, and only when its version comes from
+    // this release rather than a line of its own: a companion SDK pinned to
+    // 0.2.0 is published by the same workflow but is not part of 1.2.3, and
+    // checking it there reports a missing package for a correct release.
+    let mut pypi: Vec<String> = pypi_project_name(root)?.into_iter().collect();
+    if publishes_to_pypi(&workflows) {
+        for dist in packaged_distributions(root, PACKAGING_SCAN_DEPTH)? {
+            let belongs = match &dist.version {
+                DistVersion::FromBuild => true,
+                DistVersion::Pinned(pinned) => version == Some(pinned.as_str()),
+            };
+            if belongs && !pypi.contains(&dist.name) {
+                pypi.push(dist.name);
+            }
+        }
+    }
+    for name in pypi {
         targets.push(Target::Pypi { name });
     }
 
@@ -413,7 +555,6 @@ pub fn detect_targets(
         targets.push(Target::Npm { name });
     }
 
-    let workflows = workflows_content(root);
     if let Some((owner, repo)) = &github {
         if workflows.contains("homebrew-tap") || config.tap.is_some() {
             targets.push(Target::Homebrew {

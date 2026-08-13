@@ -28,7 +28,13 @@ pub fn run(
     let tag_only = crate::project::detect(root, config.project.project_type.as_deref())
         .map(|p| p.publishes_only_git_tag())
         .unwrap_or(false);
-    let detected = targets::detect_targets(root, &config.verify, remote.as_deref(), tag_only)?;
+    let detected = targets::detect_targets(
+        root,
+        &config.verify,
+        remote.as_deref(),
+        tag_only,
+        Some(&version),
+    )?;
     let targets = targets::filter_targets(detected, only, skip)?;
     if targets.is_empty() {
         return Err(Error::Config(

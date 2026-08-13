@@ -27,6 +27,7 @@ fn rust_repo_detects_tag_release_crates() {
         &VerifyConfig::default(),
         Some("https://github.com/rvben/mycrate"),
         false,
+        None,
     )
     .unwrap();
     assert_eq!(names(&targets), vec!["tag", "release", "crates"]);
@@ -50,6 +51,7 @@ fn publish_false_skips_crates() {
         &VerifyConfig::default(),
         Some("https://github.com/rvben/internal"),
         false,
+        None,
     )
     .unwrap();
     assert!(!names(&targets).contains(&"crates"));
@@ -63,12 +65,253 @@ fn pyproject_detects_pypi() {
         "pyproject.toml",
         "[project]\nname = \"mypkg\"\nversion = \"1.0.0\"\n",
     );
-    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None, false).unwrap();
+    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None, false, None).unwrap();
     assert!(
         targets
             .iter()
             .any(|t| matches!(t, Target::Pypi { name } if name == "mypkg"))
     );
+}
+
+/// A publish workflow plus a `pyproject.toml` under `packaging/`, which is the
+/// shape of a repo whose primary artifact is not Python: the wheel wraps a
+/// binary and is built from a subdirectory, so the root carries no
+/// `pyproject.toml` at all. Reading only the root reports the release as fully
+/// published while the registry it actually ships to went unchecked.
+fn wheel_from_subdirectory(dir: &Path) {
+    write(
+        dir,
+        ".github/workflows/release.yml",
+        "jobs:\n  publish:\n    steps:\n      - uses: pypa/gh-action-pypi-publish@release/v1\n",
+    );
+    write(
+        dir,
+        "packaging/python/pyproject.toml",
+        "[project]\nname = \"mytool\"\ndynamic = [\"version\"]\n",
+    );
+}
+
+#[test]
+fn a_wheel_built_from_a_subdirectory_is_detected() {
+    let dir = tempfile::tempdir().unwrap();
+    wheel_from_subdirectory(dir.path());
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://github.com/rvben/mytool"),
+        false,
+        Some("1.2.3"),
+    )
+    .unwrap();
+    assert!(
+        targets
+            .iter()
+            .any(|t| matches!(t, Target::Pypi { name } if name == "mytool")),
+        "got {targets:?}"
+    );
+}
+
+#[test]
+fn a_subdirectory_wheel_needs_a_publish_workflow() {
+    // The negative control for the test above, against the same tree: without
+    // evidence the repo publishes to PyPI, a stray packaging manifest is not a
+    // release target. This is the gate ghcr and homebrew already apply.
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "packaging/python/pyproject.toml",
+        "[project]\nname = \"mytool\"\ndynamic = [\"version\"]\n",
+    );
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://github.com/rvben/mytool"),
+        false,
+        Some("1.2.3"),
+    )
+    .unwrap();
+    assert!(!names(&targets).contains(&"pypi"), "got {targets:?}");
+}
+
+#[test]
+fn an_independently_versioned_companion_is_not_part_of_this_release() {
+    // shinyhub-identity's shape: a helper SDK published by the same workflow on
+    // its own version line, with `skip-existing: true` so a tag that does not
+    // bump it republishes nothing. Verifying it at the release version reports
+    // a missing package for a release that is entirely correct.
+    let dir = tempfile::tempdir().unwrap();
+    wheel_from_subdirectory(dir.path());
+    write(
+        dir.path(),
+        "packaging/python-identity/pyproject.toml",
+        "[project]\nname = \"mytool-identity\"\nversion = \"0.2.0\"\n",
+    );
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://github.com/rvben/mytool"),
+        false,
+        Some("1.2.3"),
+    )
+    .unwrap();
+    let pypi: Vec<&String> = targets
+        .iter()
+        .filter_map(|t| match t {
+            Target::Pypi { name } => Some(name),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pypi, vec!["mytool"], "got {targets:?}");
+}
+
+#[test]
+fn a_companion_pinned_to_the_release_version_is_verified() {
+    // The positive control for the exclusion above: the rule is "carries a
+    // version of its own", not "lives in a subdirectory". A package pinned to
+    // the version being released ships with it and must be checked.
+    let dir = tempfile::tempdir().unwrap();
+    wheel_from_subdirectory(dir.path());
+    write(
+        dir.path(),
+        "packaging/python-plugin/pyproject.toml",
+        "[project]\nname = \"mytool-plugin\"\nversion = \"1.2.3\"\n",
+    );
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://github.com/rvben/mytool"),
+        false,
+        Some("1.2.3"),
+    )
+    .unwrap();
+    assert!(
+        targets
+            .iter()
+            .any(|t| matches!(t, Target::Pypi { name } if name == "mytool-plugin")),
+        "got {targets:?}"
+    );
+}
+
+#[test]
+fn a_packaging_manifest_in_a_hidden_directory_is_not_a_release_target() {
+    // Worktrees live under `.worktrees/` and `.claude/worktrees/`, each holding
+    // a full checkout of some other branch. A branch that renames or splits the
+    // distribution declares a name this release never publishes, and its
+    // version comes from a tag just like the real one, so nothing but the
+    // hidden directory itself marks it as not ours.
+    let dir = tempfile::tempdir().unwrap();
+    wheel_from_subdirectory(dir.path());
+    write(
+        dir.path(),
+        ".worktrees/rename/pyproject.toml",
+        "[project]\nname = \"mytool-next\"\ndynamic = [\"version\"]\n",
+    );
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://github.com/rvben/mytool"),
+        false,
+        Some("1.2.3"),
+    )
+    .unwrap();
+    let pypi: Vec<&String> = targets
+        .iter()
+        .filter_map(|t| match t {
+            Target::Pypi { name } => Some(name),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pypi, vec!["mytool"], "got {targets:?}");
+}
+
+#[test]
+fn a_packaging_manifest_below_the_scan_depth_is_not_a_release_target() {
+    // The scan is bounded so a deep tree cannot turn every vendored sample into
+    // a release target. A worktree's own `packaging/python` sits past that
+    // bound, which is the second reason a checkout inside this one is never
+    // mistaken for part of this release.
+    let dir = tempfile::tempdir().unwrap();
+    wheel_from_subdirectory(dir.path());
+    write(
+        dir.path(),
+        "examples/vendored/deep/packaging/pyproject.toml",
+        "[project]\nname = \"too-deep\"\ndynamic = [\"version\"]\n",
+    );
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://github.com/rvben/mytool"),
+        false,
+        Some("1.2.3"),
+    )
+    .unwrap();
+    let pypi: Vec<&String> = targets
+        .iter()
+        .filter_map(|t| match t {
+            Target::Pypi { name } => Some(name),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pypi, vec!["mytool"], "got {targets:?}");
+}
+
+#[test]
+fn an_unrelated_nested_project_is_not_a_release_target() {
+    // Benchmark harnesses and sample apps carry their own `pyproject.toml` and
+    // their own version. Nothing publishes them, and a release that does not
+    // contain them is not incomplete.
+    let dir = tempfile::tempdir().unwrap();
+    wheel_from_subdirectory(dir.path());
+    write(
+        dir.path(),
+        "research/profiling/harness/pyproject.toml",
+        "[project]\nname = \"spike-harness\"\nversion = \"0.1.0\"\n",
+    );
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://github.com/rvben/mytool"),
+        false,
+        Some("1.2.3"),
+    )
+    .unwrap();
+    assert!(
+        !targets
+            .iter()
+            .any(|t| matches!(t, Target::Pypi { name } if name == "spike-harness")),
+        "got {targets:?}"
+    );
+}
+
+#[test]
+fn without_a_release_version_only_tag_derived_distributions_are_claimed() {
+    // `update_local` detects targets with no release in hand. A distribution
+    // whose version comes from the tag is this project's either way; one
+    // pinned to a literal cannot be judged without something to compare it to,
+    // and guessing wrong invents a target.
+    let dir = tempfile::tempdir().unwrap();
+    wheel_from_subdirectory(dir.path());
+    write(
+        dir.path(),
+        "packaging/python-identity/pyproject.toml",
+        "[project]\nname = \"mytool-identity\"\nversion = \"0.2.0\"\n",
+    );
+    let targets = detect_targets(
+        dir.path(),
+        &VerifyConfig::default(),
+        Some("https://github.com/rvben/mytool"),
+        false,
+        None,
+    )
+    .unwrap();
+    let pypi: Vec<&String> = targets
+        .iter()
+        .filter_map(|t| match t {
+            Target::Pypi { name } => Some(name),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pypi, vec!["mytool"], "got {targets:?}");
 }
 
 #[test]
@@ -79,7 +322,7 @@ fn private_package_json_skips_npm() {
         "package.json",
         r#"{"name": "internal-app", "version": "1.0.0", "private": true}"#,
     );
-    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None, false).unwrap();
+    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None, false, None).unwrap();
     assert!(!names(&targets).contains(&"npm"));
 }
 
@@ -96,6 +339,7 @@ fn workflow_with_ghcr_detects_ghcr_with_default_image() {
         &VerifyConfig::default(),
         Some("https://github.com/rvben/MyApp"),
         false,
+        None,
     )
     .unwrap();
     assert!(
@@ -118,6 +362,7 @@ fn workflow_with_homebrew_detects_tap_with_defaults() {
         &VerifyConfig::default(),
         Some("https://github.com/rvben/mytool"),
         false,
+        None,
     )
     .unwrap();
     assert!(targets.iter().any(
@@ -142,6 +387,7 @@ fn config_skip_removes_target() {
         &config,
         Some("https://github.com/rvben/mycrate"),
         false,
+        None,
     )
     .unwrap();
     assert!(!names(&targets).contains(&"crates"));
@@ -155,7 +401,7 @@ fn no_remote_means_no_tag_release_targets() {
         "Cargo.toml",
         "[package]\nname = \"mycrate\"\nversion = \"1.0.0\"\n",
     );
-    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None, false).unwrap();
+    let targets = detect_targets(dir.path(), &VerifyConfig::default(), None, false, None).unwrap();
     assert_eq!(names(&targets), vec!["crates"]);
 }
 
@@ -186,6 +432,7 @@ fn ansible_collection_verifies_tag_only_ignoring_incidental_manifests() {
         &VerifyConfig::default(),
         Some("https://github.com/hda/ansible-platform"),
         true,
+        None,
     )
     .unwrap();
     assert_eq!(names(&targets), vec!["tag"]);
@@ -208,6 +455,7 @@ fn tag_only_adds_tag_for_non_github_remote() {
         &VerifyConfig::default(),
         Some("https://gitlab.example.com/group/ansible-roles.git"),
         true,
+        None,
     )
     .unwrap();
     assert_eq!(names(&targets), vec!["tag"]);
@@ -653,6 +901,7 @@ fn publish_to_private_registry_only_skips_crates() {
         &VerifyConfig::default(),
         Some("https://github.com/rvben/internal"),
         false,
+        None,
     )
     .unwrap();
     assert!(!names(&targets).contains(&"crates"));
@@ -671,6 +920,7 @@ fn publish_list_naming_crates_io_keeps_crates() {
         &VerifyConfig::default(),
         Some("https://github.com/rvben/mycrate"),
         false,
+        None,
     )
     .unwrap();
     assert!(names(&targets).contains(&"crates"));
