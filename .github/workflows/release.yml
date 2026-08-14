@@ -29,7 +29,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check --locked
       - run: cargo test
@@ -52,7 +52,7 @@ jobs:
             os: [self-hosted, macOS, ARM64]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -62,7 +62,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.0.1
       - name: Install maturin and zig
         shell: bash
         run: |
@@ -91,7 +91,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/vership" "${ARCHIVE_NAME}/"
           tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
           shasum -a 256 "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: build-${{ matrix.target }}
           path: |
@@ -103,8 +103,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
       - name: Install maturin
         shell: bash
         run: |
@@ -113,7 +113,7 @@ jobs:
           echo "${RUNNER_TEMP}/build-venv/bin" >> "$GITHUB_PATH"
       - name: Build sdist
         run: maturin sdist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: target/wheels/*.tar.gz
@@ -122,8 +122,8 @@ jobs:
     needs: [build, sdist]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: /tmp/artifacts
       - uses: dtolnay/rust-toolchain@stable
@@ -135,7 +135,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Publish to PyPI
         if: ${{ !inputs.dry_run && !inputs.skip_pypi }}
@@ -159,7 +159,7 @@ jobs:
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: /tmp/artifacts
 
