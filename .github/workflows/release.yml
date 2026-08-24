@@ -129,7 +129,11 @@ jobs:
           path: |
             vership-*.tar.gz
             vership-*.tar.gz.sha256
-            ${{ runner.temp }}/vership-target-${{ github.run_id }}-${{ matrix.target }}/wheels/*.whl
+      - name: Upload wheel
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: wheel-${{ matrix.target }}
+          path: ${{ runner.temp }}/vership-target-${{ github.run_id }}-${{ matrix.target }}/wheels/*.whl
 
   sdist:
     needs: test
@@ -179,13 +183,13 @@ jobs:
 
       - name: Publish to PyPI
         if: ${{ !inputs.dry_run && !inputs.skip_pypi }}
-        run: uv publish /tmp/artifacts/build-*/*.whl /tmp/artifacts/sdist/*.tar.gz
+        run: uv publish /tmp/artifacts/wheel-*/*.whl /tmp/artifacts/sdist/*.tar.gz
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
       - name: Validate PyPI artifacts
         if: ${{ inputs.dry_run == true && inputs.skip_pypi != true }}
-        run: uvx --from twine==6.2.0 twine check --strict /tmp/artifacts/build-*/*.whl /tmp/artifacts/sdist/*.tar.gz
+        run: uvx --from twine==6.2.0 twine check --strict /tmp/artifacts/wheel-*/*.whl /tmp/artifacts/sdist/*.tar.gz
 
       - name: Create GitHub Release
         if: ${{ !inputs.dry_run }}
