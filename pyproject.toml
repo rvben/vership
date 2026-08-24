@@ -9,7 +9,14 @@ classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
+description = "Multi-target release orchestrator"
+readme = "README.md"
 dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/rvben/vership"
+Repository = "https://github.com/rvben/vership"
+Issues = "https://github.com/rvben/vership/issues"
 
 [tool.maturin]
 bindings = "bin"
