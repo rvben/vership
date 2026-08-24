@@ -78,6 +78,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          clean: false
+      - name: Isolate Cargo build output
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/vership-target-${GITHUB_RUN_ID}-${{ matrix.target }}" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
           toolchain: 1.96.0
@@ -115,7 +120,7 @@ jobs:
         run: |
           ARCHIVE_NAME="vership-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir -p "${ARCHIVE_NAME}"
-          cp "target/${{ matrix.target }}/release/vership" "${ARCHIVE_NAME}/"
+          cp "${CARGO_TARGET_DIR}/${{ matrix.target }}/release/vership" "${ARCHIVE_NAME}/"
           tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
           shasum -a 256 "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -124,7 +129,7 @@ jobs:
           path: |
             vership-*.tar.gz
             vership-*.tar.gz.sha256
-            target/wheels/*.whl
+            ${{ runner.temp }}/vership-target-${{ github.run_id }}-${{ matrix.target }}/wheels/*.whl
 
   sdist:
     needs: test
