@@ -298,6 +298,96 @@ fn detect_override_ansible_collection() {
 }
 
 #[test]
+fn detect_private_package_json_loses_to_go_mod() {
+    // The shape that broke a real release: a Go repo grew a private Playwright
+    // harness at the root. package.json outranked go.mod, so the version was
+    // read from a manifest that has none and every bump failed at tag time,
+    // with nothing in CI to catch it first.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name": "app-browser-tests", "private": true, "devDependencies": {"@playwright/test": "1.62.1"}}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("go.mod"), "module example.com/test\n").unwrap();
+    let p = project::detect(dir.path(), None).unwrap();
+    assert_eq!(p.name(), "Go");
+}
+
+#[test]
+fn detect_private_package_json_loses_to_python() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name": "docs", "private": true}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"test\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    let p = project::detect(dir.path(), None).unwrap();
+    assert_eq!(p.name(), "Python");
+}
+
+#[test]
+fn detect_private_package_json_alone_is_still_node() {
+    // A private application is not published, but it is still versioned in
+    // package.json. Skipping it entirely would leave such a repo undetectable.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name": "internal-app", "private": true, "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    let p = project::detect(dir.path(), None).unwrap();
+    assert_eq!(p.name(), "Node");
+}
+
+#[test]
+fn detect_published_package_json_still_wins_over_go_mod() {
+    // Only `private` demotes a manifest. A publishable package.json alongside a
+    // go.mod keeps the existing precedence.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name": "test", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("go.mod"), "module example.com/test\n").unwrap();
+    let p = project::detect(dir.path(), None).unwrap();
+    assert_eq!(p.name(), "Node");
+}
+
+#[test]
+fn detect_private_false_package_json_wins_over_go_mod() {
+    // `"private": false` is an explicit statement that the package is
+    // publishable, so it must behave like an absent key, not like `true`.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name": "test", "private": false, "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("go.mod"), "module example.com/test\n").unwrap();
+    let p = project::detect(dir.path(), None).unwrap();
+    assert_eq!(p.name(), "Node");
+}
+
+#[test]
+fn detect_malformed_package_json_still_claims_the_repo() {
+    // An unparseable manifest is not evidence of tooling. Keep claiming the
+    // repo so read_version reports a precise parse error rather than silently
+    // releasing something else's version.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("package.json"), "{ not json").unwrap();
+    fs::write(dir.path().join("go.mod"), "module example.com/test\n").unwrap();
+    let p = project::detect(dir.path(), None).unwrap();
+    assert_eq!(p.name(), "Node");
+}
+
+#[test]
 fn detect_override_ansible_alias() {
     let dir = TempDir::new().unwrap();
     let p = project::detect(dir.path(), Some("ansible")).unwrap();

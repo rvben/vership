@@ -29,6 +29,25 @@ fn is_ansible_collection(root: &Path) -> bool {
         .all(|key| version::parse_galaxy_field(&content, key).is_some())
 }
 
+/// Whether `package_json` declares itself private. A private package is never
+/// published, so it is evidence of tooling vendored into the repo rather than of
+/// the repo's own released identity: a Playwright harness, a docs site, a
+/// workspace root. `verify` already reads a private manifest as no npm package
+/// at all (`verify::targets::npm_package_name`).
+///
+/// A manifest that cannot be read or parsed does not count as private, so a
+/// malformed `package.json` keeps today's behaviour of claiming the repo and
+/// reporting a precise parse error from `read_version`.
+fn is_private_package_json(package_json: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(package_json) else {
+        return false;
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    parsed.get("private") == Some(&serde_json::Value::Bool(true))
+}
+
 /// Detect the project type rooted at `root`.
 ///
 /// When `project_type_override` is provided it takes precedence over auto-detection.
@@ -74,8 +93,12 @@ pub fn detect(root: &Path, project_type_override: Option<&str>) -> Result<Box<dy
         return Ok(Box::new(RustProject::new()));
     }
 
-    // 3. package.json → Node
-    if package_json.exists() {
+    // 3. package.json → Node, unless it is private. A private manifest is
+    //    tooling, not identity, so it must not outrank the go.mod or
+    //    pyproject.toml carrying the version the repo actually releases. It is
+    //    still enough on its own (step 7): a private application is versioned in
+    //    package.json like any other.
+    if package_json.exists() && !is_private_package_json(&package_json) {
         return Ok(Box::new(NodeProject::new()));
     }
 
@@ -99,6 +122,12 @@ pub fn detect(root: &Path, project_type_override: Option<&str>) -> Result<Box<dy
     ];
     if gradle_markers.iter().any(|m| root.join(m).exists()) {
         return Ok(Box::new(GradleProject::new()));
+    }
+
+    // 7. A private package.json, now that no other marker has claimed the repo.
+    //    A private Node application still carries its version here.
+    if package_json.exists() {
+        return Ok(Box::new(NodeProject::new()));
     }
 
     Err(Error::Other(

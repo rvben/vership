@@ -128,6 +128,8 @@ doesn't fire.
 7. **Regenerate** artifacts from commands (`artifacts`)
 8. **Commit**, **tag**, and **push**
 
+A repo carrying several manifests is resolved by precedence: `galaxy.yml`, `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml`, Gradle. A `package.json` marked `"private": true` is skipped in that order and considered only once nothing else matches, so a vendored test harness or docs site does not outrank the manifest the repo actually releases. Set `[project] type` in vership.toml to override detection entirely.
+
 Your existing CI release workflow (GitHub Actions, etc.) triggers on the tag push as usual. vership handles the local side only.
 
 ## Post-Release Verification
@@ -260,6 +262,8 @@ Commands run from the project root via `sh -c`. Output files are staged automati
 ```toml
 [project]
 branch = "main"              # Branch to release from
+type = "go"                  # Skip detection: rust, rust-maturin, node, go,
+                             # python, gradle, ansible-collection
 
 [hooks]
 pre-bump = "make verify"     # Run before version bump
