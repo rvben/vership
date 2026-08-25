@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.20](https://github.com/rvben/vership/compare/v0.5.19...v0.5.20) - 2026-08-25
+
+### Fixed
+
+- **detect**: rank a private package.json below other project markers ([9fc08f0](https://github.com/rvben/vership/commit/9fc08f097b0e8cce91dc542e1afb6832cd8bf5f0))
+- **package**: complete distribution metadata ([7cbb8e4](https://github.com/rvben/vership/commit/7cbb8e42a8ba4298caf82e6ec91ccb397b90a8b5))
+- **release**: separate wheel artifacts ([27dde25](https://github.com/rvben/vership/commit/27dde259be5ed64fe213ae21a7633c04bea1daa1))
+- **release**: isolate matrix build output ([cde1b0c](https://github.com/rvben/vership/commit/cde1b0c130510673ec36d0b855ecd45846fca426))
+- **ci**: install pinned Rust components ([96a87a6](https://github.com/rvben/vership/commit/96a87a6f084dede35e7b455e470efaad271b041c))
+
 ## [0.5.18](https://github.com/rvben/vership/compare/v0.5.17...v0.5.18) - 2026-08-13
 
 ### Fixed
