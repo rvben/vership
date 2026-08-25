@@ -119,16 +119,26 @@ jobs:
       - name: Package binary
         run: |
           ARCHIVE_NAME="vership-${{ github.ref_name }}-${{ matrix.target }}"
-          mkdir -p "${ARCHIVE_NAME}"
-          cp "${CARGO_TARGET_DIR}/${{ matrix.target }}/release/vership" "${ARCHIVE_NAME}/"
-          tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
-          shasum -a 256 "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
+          # Self-hosted runners share one workspace across matrix jobs and keep
+          # it between runs, so the workspace root holds archives belonging to
+          # other targets and other refs. Stage each archive under a private
+          # directory so packaging sees only this job's own output.
+          STAGE="${RUNNER_TEMP}/pkg-${{ github.run_id }}-${{ matrix.target }}"
+          rm -rf "${STAGE}"
+          mkdir -p "${STAGE}/${ARCHIVE_NAME}"
+          cp "${CARGO_TARGET_DIR}/${{ matrix.target }}/release/vership" "${STAGE}/${ARCHIVE_NAME}/"
+          tar czf "${STAGE}/${ARCHIVE_NAME}.tar.gz" -C "${STAGE}" "${ARCHIVE_NAME}"
+          (cd "${STAGE}" && shasum -a 256 "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256")
+          echo "ARCHIVE_PATH=${STAGE}/${ARCHIVE_NAME}" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: build-${{ matrix.target }}
+          # Name the two files exactly. A glob picks up whatever else is around,
+          # and the release step then sees one asset name from two matrix jobs
+          # and rejects the upload as a duplicate.
           path: |
-            vership-*.tar.gz
-            vership-*.tar.gz.sha256
+            ${{ env.ARCHIVE_PATH }}.tar.gz
+            ${{ env.ARCHIVE_PATH }}.tar.gz.sha256
       - name: Upload wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
