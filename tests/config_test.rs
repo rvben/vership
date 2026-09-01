@@ -1,3 +1,4 @@
+use assert_cmd::Command as AssertCommand;
 use vership::config::Config;
 
 #[test]
@@ -34,7 +35,10 @@ allow_untracked = true
     assert_eq!(config.hooks.post_push.as_deref(), Some("echo done"));
     assert!(!config.checks.lint);
     assert!(!config.checks.tests);
-    assert!(config.checks.allow_untracked);
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("vership.toml");
+    std::fs::write(&path, toml).unwrap();
+    assert!(Config::load_allow_untracked(&path).unwrap());
 }
 
 #[test]
@@ -47,7 +51,15 @@ pre-bump = "make check"
     assert_eq!(config.project.branch, "main");
     assert!(config.checks.lint);
     assert!(config.checks.tests);
-    assert!(!config.checks.allow_untracked);
+    let dir = tempfile::TempDir::new().unwrap();
+    assert!(!Config::load_allow_untracked(&dir.path().join("missing.toml")).unwrap());
+}
+
+#[test]
+fn invalid_unconventional_mode_fails_closed() {
+    let error = Config::parse("[changelog]\nunconventional = \"strcit\"\n")
+        .expect_err("a policy typo must not silently weaken strict mode");
+    assert!(error.to_string().contains("exclude, include, or strict"));
 }
 
 #[test]
@@ -65,6 +77,37 @@ fn load_malformed_file_returns_an_error_instead_of_defaults() {
     let error =
         Config::load_checked(&path).expect_err("invalid release configuration must fail closed");
     assert!(error.to_string().contains("parse vership.toml"));
+}
+
+#[test]
+fn config_show_includes_the_effective_untracked_policy_without_a_config_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+
+    let text = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["config", "show", "--output", "text"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(text).unwrap();
+    assert!(text.contains("allow_untracked = false"), "got:\n{text}");
+    let reparsed: toml::Value = toml::from_str(&text).expect("text output must be valid TOML");
+    assert_eq!(reparsed["checks"]["allow_untracked"].as_bool(), Some(false));
+
+    let json = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["config", "show", "--output", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(json["checks"]["allow_untracked"], false);
 }
 
 #[test]

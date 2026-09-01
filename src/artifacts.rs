@@ -35,10 +35,9 @@ pub fn run(root: &Path, entries: &[ArtifactEntry]) -> Result<Vec<PathBuf>> {
 
             produced.push(PathBuf::from(output_path));
         } else {
-            let status = Command::new("sh")
-                .args(["-c", &entry.command])
-                .current_dir(root)
-                .status()
+            let mut command = Command::new("sh");
+            command.args(["-c", &entry.command]).current_dir(root);
+            let status = crate::process::status_with_stdout_to_stderr(&mut command)
                 .map_err(|e| Error::Other(format!("artifact command failed: {e}")))?;
 
             if !status.success() {

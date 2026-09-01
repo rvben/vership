@@ -40,10 +40,9 @@ impl ProjectType for GoProject {
     }
 
     fn verify_lockfile(&self, root: &Path) -> Result<()> {
-        let status = std::process::Command::new("go")
-            .args(["mod", "verify"])
-            .current_dir(root)
-            .status()
+        let mut command = std::process::Command::new("go");
+        command.args(["mod", "verify"]).current_dir(root);
+        let status = crate::process::status_with_stdout_to_stderr(&mut command)
             .map_err(|e| Error::Other(format!("run go mod verify: {e}")))?;
         if status.success() {
             Ok(())
@@ -55,10 +54,9 @@ impl ProjectType for GoProject {
     }
 
     fn sync_lockfile(&self, root: &Path) -> Result<()> {
-        let status = std::process::Command::new("go")
-            .args(["mod", "tidy"])
-            .current_dir(root)
-            .status()
+        let mut command = std::process::Command::new("go");
+        command.args(["mod", "tidy"]).current_dir(root);
+        let status = crate::process::status_with_stdout_to_stderr(&mut command)
             .map_err(|e| Error::Other(format!("run go mod tidy: {e}")))?;
         if status.success() {
             Ok(())
@@ -70,10 +68,9 @@ impl ProjectType for GoProject {
     }
 
     fn run_lint(&self, root: &Path) -> Result<()> {
-        let status = std::process::Command::new("go")
-            .args(["vet", "./..."])
-            .current_dir(root)
-            .status()
+        let mut command = std::process::Command::new("go");
+        command.args(["vet", "./..."]).current_dir(root);
+        let status = crate::process::status_with_stdout_to_stderr(&mut command)
             .map_err(|e| Error::Other(format!("run go vet: {e}")))?;
         if status.success() {
             Ok(())
@@ -83,10 +80,9 @@ impl ProjectType for GoProject {
     }
 
     fn run_tests(&self, root: &Path) -> Result<()> {
-        let status = std::process::Command::new("go")
-            .args(["test", "./..."])
-            .current_dir(root)
-            .status()
+        let mut command = std::process::Command::new("go");
+        command.args(["test", "./..."]).current_dir(root);
+        let status = crate::process::status_with_stdout_to_stderr(&mut command)
             .map_err(|e| Error::Other(format!("run go test: {e}")))?;
         if status.success() {
             Ok(())

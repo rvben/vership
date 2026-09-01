@@ -22,9 +22,11 @@ pub fn parse_conventional_commit(message: &str) -> Option<ConventionalCommit> {
 
     let re = Regex::new(r"^(\w+)(?:\(([^)]+)\))?(!)?: (.+)$").expect("valid regex");
     let caps = re.captures(subject)?;
-    let has_breaking_footer = message.lines().skip(1).any(|line| {
-        let line = line.trim_start();
-        line.starts_with("BREAKING CHANGE:") || line.starts_with("BREAKING-CHANGE:")
+    let normalized = message.replace("\r\n", "\n");
+    let has_breaking_footer = normalized.rsplit_once("\n\n").is_some_and(|(_, footer)| {
+        footer.lines().any(|line| {
+            line.starts_with("BREAKING CHANGE:") || line.starts_with("BREAKING-CHANGE:")
+        })
     });
 
     Some(ConventionalCommit {
@@ -233,6 +235,92 @@ fn split_at_first_release_heading(content: &str) -> Option<(&str, &str)> {
     Some(content.split_at(pos))
 }
 
+#[derive(Clone, Copy)]
+struct MarkdownFence {
+    marker: char,
+    length: usize,
+}
+
+fn fence_run(line: &str) -> Option<(char, usize, &str)> {
+    let indent = line.bytes().take_while(|byte| *byte == b' ').count();
+    if indent > 3 {
+        return None;
+    }
+    let rest = &line[indent..];
+    let marker = rest.chars().next()?;
+    if !matches!(marker, '`' | '~') {
+        return None;
+    }
+    let length = rest
+        .chars()
+        .take_while(|character| *character == marker)
+        .count();
+    (length >= 3).then(|| (marker, length, &rest[length..]))
+}
+
+/// Update fence state and return true when this line is part of a fence.
+fn scan_fence_line(line: &str, fence: &mut Option<MarkdownFence>) -> bool {
+    if let Some(open) = *fence {
+        if let Some((marker, length, suffix)) = fence_run(line)
+            && marker == open.marker
+            && length >= open.length
+            && suffix.trim().is_empty()
+        {
+            *fence = None;
+        }
+        return true;
+    }
+    if let Some((marker, length, suffix)) = fence_run(line) {
+        // A backtick info string cannot contain a backtick. Treating such a
+        // line as prose matches CommonMark and prevents false fence state.
+        if marker != '`' || !suffix.contains('`') {
+            *fence = Some(MarkdownFence { marker, length });
+            return true;
+        }
+    }
+    false
+}
+
+fn find_line_outside_fences(
+    content: &str,
+    from: usize,
+    mut predicate: impl FnMut(&str) -> bool,
+) -> Option<usize> {
+    let mut fence = None;
+    let mut offset = 0;
+    for line in content.split_inclusive('\n') {
+        let line_without_ending = line.trim_end_matches(['\n', '\r']);
+        if !scan_fence_line(line_without_ending, &mut fence)
+            && offset >= from
+            && predicate(line_without_ending)
+        {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
+}
+
+fn find_h2_outside_fences(content: &str, from: usize) -> Option<usize> {
+    find_line_outside_fences(content, from, |line| {
+        line.starts_with("## ") || line.starts_with("##\t")
+    })
+}
+
+fn prepend_to_changelog_checked(existing: Option<&str>, new_section: &str) -> String {
+    let header = "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/).\n";
+    match existing {
+        Some(content) => match find_h2_outside_fences(content, 0) {
+            Some(position) => {
+                let (preamble, releases) = content.split_at(position);
+                join_blocks(&[preamble, new_section, releases])
+            }
+            None => join_blocks(&[content, new_section]),
+        },
+        None => join_blocks(&[header, new_section]),
+    }
+}
+
 /// Join document blocks with exactly one blank line between them, ending in a
 /// single newline. Blank-only blocks are dropped, so a run of blank lines never
 /// grows at a join and a release never lands against an empty preamble.
@@ -274,6 +362,13 @@ pub struct ChangelogUpdate {
     /// `[Unreleased]` section was empty (the generated body was used) or
     /// absent (legacy prepend).
     pub promoted: bool,
+}
+
+/// Detailed result returned by the checked integration path.
+#[derive(Debug)]
+pub struct ChangelogIntegration {
+    pub content: String,
+    pub promoted: bool,
     /// Number of generated commit entries omitted because curated notes are
     /// authoritative. Callers surface this so replacement is never silent.
     pub replaced_generated_entries: usize,
@@ -293,10 +388,10 @@ pub struct ChangelogUpdate {
 pub fn integrate_changelog_checked(
     existing: Option<&str>,
     new_section: &str,
-) -> std::result::Result<ChangelogUpdate, String> {
+) -> std::result::Result<ChangelogIntegration, String> {
     let Some(content) = existing else {
-        return Ok(ChangelogUpdate {
-            content: prepend_to_changelog(None, new_section),
+        return Ok(ChangelogIntegration {
+            content: prepend_to_changelog_checked(None, new_section),
             promoted: false,
             replaced_generated_entries: 0,
         });
@@ -308,36 +403,39 @@ pub fn integrate_changelog_checked(
     let unreleased_re =
         Regex::new(r"(?im)^##[ \t]+(?:\[unreleased\](?:\([^)]+\))?|unreleased)[ \t]*\r?$")
             .expect("valid regex");
-    let matches: Vec<_> = unreleased_re.find_iter(content).collect();
-    if matches.len() > 1 {
-        return Err("multiple Unreleased headings found; keep exactly one before releasing".into());
+    let candidates: Vec<_> = Regex::new(r"(?im)^##[^\n]*unreleased[^\n]*$")
+        .expect("valid regex")
+        .find_iter(content)
+        .filter(|candidate| !is_in_markdown_fence(content, candidate.start()))
+        .collect();
+    let matches: Vec<_> = unreleased_re
+        .find_iter(content)
+        .filter(|candidate| !is_in_markdown_fence(content, candidate.start()))
+        .collect();
+    if candidates.len() > 1 {
+        return Err(
+            "multiple Unreleased-like headings found; keep exactly one supported heading before releasing"
+                .into(),
+        );
     }
     let Some(m) = matches.first().copied() else {
-        let near_match = Regex::new(r"(?im)^##[^\n]*unreleased[^\n]*$")
-            .expect("valid regex")
-            .is_match(content);
-        if near_match {
+        if !candidates.is_empty() {
             return Err(
                 "unsupported Unreleased heading; use `## [Unreleased]` or `## Unreleased`".into(),
             );
         }
-        return Ok(ChangelogUpdate {
-            content: prepend_to_changelog(Some(content), new_section),
+        return Ok(ChangelogIntegration {
+            content: prepend_to_changelog_checked(Some(content), new_section),
             promoted: false,
             replaced_generated_entries: 0,
         });
     };
 
     let preamble = &content[..m.start()];
-    // Everything after the [Unreleased] heading line.
-    let after_heading = &content[m.end()..];
-
-    // The [Unreleased] body runs until the next `## ` heading (or end of file).
-    let next_heading = Regex::new(r"(?m)^##[ \t]+").expect("valid regex");
-    let (unreleased_body, rest) = match next_heading.find(after_heading) {
-        Some(h) => (&after_heading[..h.start()], &after_heading[h.start()..]),
-        None => (after_heading, ""),
-    };
+    // Headings shown inside fenced examples are content, not section bounds.
+    let next_heading = find_h2_outside_fences(content, m.end()).unwrap_or(content.len());
+    let unreleased_body = &content[m.end()..next_heading];
+    let rest = &content[next_heading..];
 
     // Split the generated section into its heading line and body.
     let new_header = new_section.lines().next().unwrap_or(new_section);
@@ -364,24 +462,64 @@ pub fn integrate_changelog_checked(
     // `[Unreleased]:` / `[x.y.z]:` link-reference definitions are redundant and
     // drift out of date on every promotion. Strip them, leaving a clean trailing
     // newline. Non-version link-reference definitions are preserved.
-    let result = strip_version_link_refs(&result);
-    Ok(ChangelogUpdate {
+    let result = strip_version_link_refs_checked(&result);
+    Ok(ChangelogIntegration {
         content: result,
         promoted: curated,
         replaced_generated_entries,
     })
 }
 
-/// Compatibility wrapper for callers that only handle well-formed changelogs.
+fn is_in_markdown_fence(content: &str, offset: usize) -> bool {
+    let mut fence = None;
+    for line in content[..offset].lines() {
+        scan_fence_line(line, &mut fence);
+    }
+    fence.is_some()
+}
+
+/// Compatibility wrapper preserving the permissive 0.5.x behavior.
 /// Release paths use [`integrate_changelog_checked`] so ambiguity is returned
-/// as an actionable error rather than silently ignored.
-#[deprecated(
-    since = "0.5.21",
-    note = "use integrate_changelog_checked to handle malformed headings"
-)]
+/// as an actionable error rather than silently ignored, while library callers
+/// upgrading within the patch line never gain a new panic path.
 pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> ChangelogUpdate {
-    integrate_changelog_checked(existing, new_section)
-        .expect("ambiguous or malformed Unreleased heading")
+    let Some(content) = existing else {
+        return ChangelogUpdate {
+            content: prepend_to_changelog(None, new_section),
+            promoted: false,
+        };
+    };
+    let unreleased_re = Regex::new(r"(?m)^## \[Unreleased\][^\n]*$").expect("valid regex");
+    let Some(m) = unreleased_re.find(content) else {
+        return ChangelogUpdate {
+            content: prepend_to_changelog(Some(content), new_section),
+            promoted: false,
+        };
+    };
+    let preamble = &content[..m.start()];
+    let after_heading = &content[m.end()..];
+    let next_heading = Regex::new(r"(?m)^## ").expect("valid regex");
+    let (unreleased_body, rest) = match next_heading.find(after_heading) {
+        Some(heading) => (
+            &after_heading[..heading.start()],
+            &after_heading[heading.start()..],
+        ),
+        None => (after_heading, ""),
+    };
+    let new_header = new_section.lines().next().unwrap_or(new_section);
+    let promoted = !unreleased_body.trim().is_empty();
+    let promoted_section = if promoted {
+        join_blocks(&[new_header, unreleased_body])
+    } else {
+        new_section.to_string()
+    };
+    let content = strip_version_link_refs(&join_blocks(&[
+        preamble,
+        "## [Unreleased]",
+        &promoted_section,
+        rest,
+    ]));
+    ChangelogUpdate { content, promoted }
 }
 
 /// Remove changelog version link-reference definitions: the bottom
@@ -403,23 +541,43 @@ fn strip_version_link_refs(content: &str) -> String {
     format!("{}\n", kept.join("\n").trim_end())
 }
 
+fn strip_version_link_refs_checked(content: &str) -> String {
+    let ref_re = Regex::new(
+        r"^\[(?:Unreleased|v?\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\]:\s+\S",
+    )
+    .expect("valid regex");
+    let mut fence = None;
+    let kept: Vec<&str> = content
+        .lines()
+        .filter(|line| scan_fence_line(line, &mut fence) || !ref_re.is_match(line))
+        .collect();
+    format!("{}\n", kept.join("\n").trim_end())
+}
+
 /// Extract the changelog section for `version` from a full document: from its
 /// `## [version]` heading up to (but not including) the next `## ` heading.
 /// Useful for previewing exactly what a release section will contain.
 pub fn extract_section<'a>(content: &'a str, version: &str) -> Option<&'a str> {
-    let heading = format!("## [{version}]");
-    let start = content.find(&heading)?;
-    let rest = &content[start..];
-    let body_start = rest.find('\n').map(|i| i + 1).unwrap_or(rest.len());
-    let next = Regex::new(r"(?m)^##[ \t]+")
-        .expect("valid regex")
-        .find(&rest[body_start..])
-        .map(|m| body_start + m.start())
-        .unwrap_or(rest.len());
-    Some(rest[..next].trim_end())
+    let heading = version_heading_regex(version);
+    let start = find_line_outside_fences(content, 0, |line| heading.is_match(line))?;
+    let body_start = content[start..]
+        .find('\n')
+        .map(|index| start + index + 1)
+        .unwrap_or(content.len());
+    let end = find_h2_outside_fences(content, body_start).unwrap_or(content.len());
+    Some(content[start..end].trim_end())
 }
 
 /// Check if a CHANGELOG.md already has an entry for the given version.
 pub fn version_exists_in_changelog(content: &str, version: &str) -> bool {
-    content.contains(&format!("## [{version}]"))
+    let heading = version_heading_regex(version);
+    find_line_outside_fences(content, 0, |line| heading.is_match(line)).is_some()
+}
+
+fn version_heading_regex(version: &str) -> Regex {
+    let escaped = regex::escape(version);
+    Regex::new(&format!(
+        r"(?m)^##[ \t]+\[{escaped}\](?:\([^\r\n]*\))?[ \t]*(?:-[ \t]*[^\r\n]+)?\r?$"
+    ))
+    .expect("escaped version produces a valid regex")
 }

@@ -2,7 +2,7 @@ use std::process;
 
 use clap::Parser;
 
-use vership::cli::{Cli, Command, ConfigCommand};
+use vership::cli::{ConfigCommand, RuntimeCli as Cli, RuntimeCommand as Command};
 use vership::error::Error;
 use vership::output::OutputConfig;
 
@@ -146,7 +146,9 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use clap::Parser;
-    use vership::cli::{BumpLevel, Cli, Command, ConfigCommand, OutputFormat};
+    use vership::cli::{
+        BumpLevel, ConfigCommand, OutputFormat, RuntimeCli as Cli, RuntimeCommand as Command,
+    };
 
     #[test]
     fn cli_bump_patch() {
@@ -228,6 +230,21 @@ mod tests {
             Command::Release { dry_run, .. } => assert!(dry_run),
             _ => panic!("expected Release"),
         }
+    }
+
+    #[test]
+    fn cli_release_and_resume_accept_prepare() {
+        let release = Cli::try_parse_from(["vership", "release", "--prepare"]).unwrap();
+        assert!(matches!(
+            release.command,
+            Command::Release { prepare: true, .. }
+        ));
+
+        let resume = Cli::try_parse_from(["vership", "resume", "--prepare"]).unwrap();
+        assert!(matches!(
+            resume.command,
+            Command::Resume { prepare: true, .. }
+        ));
     }
 
     #[test]

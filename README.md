@@ -121,17 +121,22 @@ doesn't fire.
 `vership bump patch` runs this flow:
 
 1. **Detect** project type (Rust, Rust+Maturin, Node, Go, Python, Gradle, Ansible Collection)
-2. **Check** clean working tree (including untracked files), correct branch, intended tag doesn't exist, lockfile in sync
+2. **Check** clean working tree (including untracked files), correct branch, intended tag doesn't exist locally or on origin, lockfile in sync
 3. **Check** lint and tests pass (skippable with `--skip-checks`)
 4. **Bump** version in project files (Cargo.toml, package.json, pyproject.toml, gradle.properties, galaxy.yml) or tag directly (Go)
 5. **Update** version references in extra files (`version_files`)
 6. **Generate** changelog from conventional commits since last tag
 7. **Regenerate** artifacts from commands (`artifacts`)
-8. **Commit**, **tag**, and **push**
+8. **Commit**, **tag**, and atomically **push** the branch and tag
 
 A repo carrying several manifests is resolved by precedence: `galaxy.yml`, `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml`, Gradle. A `package.json` marked `"private": true` is skipped in that order and considered only once nothing else matches, so a vendored test harness or docs site does not outrank the manifest the repo actually releases. Set `[project] type` in vership.toml to override detection entirely.
 
 Your existing CI release workflow (GitHub Actions, etc.) triggers on the tag push as usual. vership handles the local side only.
+
+Release commits carry a `Vership-Release` trailer. If a pre-push hook or the
+network fails after the local tag is created but before origin receives it,
+rerunning the same command safely removes that unpublished tag and retries the
+same version. Vership never rewrites a tag that already exists on origin.
 
 ## Post-Release Verification
 

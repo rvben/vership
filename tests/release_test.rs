@@ -193,6 +193,145 @@ fn changelog_preview_uses_requested_level_and_curated_unbracketed_notes() {
 }
 
 #[test]
+fn changelog_preview_matches_an_interrupted_bump_target() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    fs::write(root.join("gradle.properties"), "pluginVersion=0.1.6\n").unwrap();
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["changelog", "patch"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("## [0.1.6]"), "got:\n{stdout}");
+    assert!(!stdout.contains("## [0.1.7]"), "got:\n{stdout}");
+}
+
+#[test]
+fn changelog_preview_shows_the_exact_curated_prepared_section() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(
+        root,
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- curated release note\n",
+    );
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--prepare"])
+        .assert()
+        .success();
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["changelog", "patch"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("## [0.1.6]"), "got:\n{stdout}");
+    assert!(stdout.contains("- curated release note"), "got:\n{stdout}");
+    assert!(!stdout.contains("- release fix"), "got:\n{stdout}");
+    assert_eq!(stdout.matches("## [0.1.6]").count(), 1);
+}
+
+#[test]
+fn git_breaking_footer_reaches_changelog_without_buffering_full_body() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    fs::write(root.join("protocol.txt"), "changed").unwrap();
+    git(root, &["add", "protocol.txt"]);
+    git(
+        root,
+        &[
+            "commit",
+            "-m",
+            "chore: change protocol",
+            "-m",
+            "BREAKING CHANGE: clients must reconnect",
+        ],
+    );
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--dry-run"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Generated changelog (2 entries)"),
+        "got:\n{stderr}"
+    );
+    assert!(stderr.contains("### Breaking Changes"), "got:\n{stderr}");
+    assert!(stderr.contains("change protocol"), "got:\n{stderr}");
+}
+
+#[test]
+fn include_mode_counts_non_conventional_changelog_entries() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    fs::write(
+        root.join("vership.toml"),
+        "[changelog]\nunconventional = \"include\"\n",
+    )
+    .unwrap();
+    git(root, &["add", "vership.toml"]);
+    git(root, &["commit", "-m", "chore: configure changelog"]);
+    fs::write(root.join("notes.txt"), "documented").unwrap();
+    git(root, &["add", "notes.txt"]);
+    git(root, &["commit", "-m", "Document operational behavior"]);
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--dry-run"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Generated changelog (2 entries)"),
+        "got:\n{stderr}"
+    );
+    assert!(stderr.contains("### Other"), "got:\n{stderr}");
+    assert!(
+        stderr.contains("Document operational behavior"),
+        "got:\n{stderr}"
+    );
+}
+
+#[test]
+fn unreadable_changelog_bytes_fail_without_overwrite() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    let invalid = [0xff, 0xfe, 0xfd];
+    fs::write(root.join("CHANGELOG.md"), invalid).unwrap();
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["changelog", "patch"])
+        .assert()
+        .failure();
+    assert_eq!(fs::read(root.join("CHANGELOG.md")).unwrap(), invalid);
+}
+
+#[test]
 fn preflight_checks_the_requested_release_tag() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
@@ -263,6 +402,35 @@ fn preflight_can_explicitly_allow_untracked_files() {
 }
 
 #[test]
+fn legacy_library_preflight_ignores_untracked_files_and_remote_access() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    fs::write(root.join("scratch.txt"), "not part of the release").unwrap();
+    git(
+        root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://invalid.invalid/never.git",
+        ],
+    );
+    let project = vership::project::detect(root, None).unwrap();
+    let options = vership::checks::CheckOptions {
+        expected_branch: "main".to_string(),
+        run_lint: false,
+        run_tests: false,
+        lint_command: None,
+        test_command: None,
+        allow_uncommitted: false,
+    };
+
+    vership::checks::run_preflight(root, "v0.1.6", project.as_ref(), &options)
+        .expect("the stable library wrapper remains local-only and tracked-only");
+}
+
+#[test]
 fn resume_still_rejects_unrelated_untracked_files() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
@@ -295,7 +463,7 @@ fn failed_custom_checks_preserve_diagnostics() {
     setup_gradle_release(root, "# Changelog\n\n");
     fs::write(
         root.join("vership.toml"),
-        "[checks]\nlint = false\ntest_command = \"printf 'specific failure\\n' >&2; exit 9\"\n",
+        "[checks]\nlint = false\ntest_command = \"printf 'specific failure\\n'; exit 9\"\n",
     )
     .unwrap();
     git(root, &["add", "vership.toml"]);
@@ -309,7 +477,42 @@ fn failed_custom_checks_preserve_diagnostics() {
         .failure()
         .get_output()
         .clone();
+    assert!(
+        output.stdout.is_empty(),
+        "child diagnostics must not contaminate command stdout"
+    );
     assert!(String::from_utf8_lossy(&output.stderr).contains("specific failure"));
+}
+
+#[test]
+fn release_hook_and_artifact_stdout_is_routed_to_stderr() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    fs::write(
+        root.join("vership.toml"),
+        "[hooks]\npre-bump = \"printf hook-diagnostic\"\n\n[[artifacts]]\ncommand = \"printf artifact-diagnostic\"\n",
+    )
+    .unwrap();
+    git(root, &["add", "vership.toml"]);
+    git(
+        root,
+        &["commit", "-m", "chore: configure release diagnostics"],
+    );
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--no-push"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    assert!(output.stdout.is_empty(), "release stdout must remain clean");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("hook-diagnostic"), "got:\n{stderr}");
+    assert!(stderr.contains("artifact-diagnostic"), "got:\n{stderr}");
 }
 
 #[test]
@@ -329,6 +532,12 @@ fn prepare_creates_a_reviewable_commit_without_a_tag() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("Prepared release commit for v0.1.6"));
 
     assert!(!tag_exists(root, "v0.1.6"));
+    let message = Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&message.stdout).contains("Vership-Release: v0.1.6"));
     assert!(
         Command::new("git")
             .args(["status", "--porcelain"])
@@ -338,6 +547,19 @@ fn prepare_creates_a_reviewable_commit_without_a_tag() {
             .stdout
             .is_empty()
     );
+
+    let preview = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["changelog", "patch"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview = String::from_utf8_lossy(&preview);
+    assert!(preview.contains("## [0.1.6]"), "got:\n{preview}");
+    assert!(!preview.contains("## [0.1.7]"), "got:\n{preview}");
 
     AssertCommand::cargo_bin("vership")
         .unwrap()
@@ -386,6 +608,230 @@ fn completing_a_prepared_release_does_not_replay_bump_hooks() {
         "completing the release must not replay pre-bump hooks"
     );
     assert!(tag_exists(root, "v0.1.6"));
+}
+
+#[test]
+fn bump_retries_an_unpublished_local_tag_after_push_failure() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    let remote = TempDir::new().unwrap();
+    git(remote.path(), &["init", "--bare"]);
+    git(
+        root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(root, &["push", "origin", "main", "v0.1.5"]);
+
+    let marker_dir = TempDir::new().unwrap();
+    let marker = marker_dir.path().join("allow-second-push");
+    fs::write(
+        root.join("vership.toml"),
+        format!(
+            "[hooks]\npre-push = \"if [ -f '{}' ]; then exit 0; else touch '{}'; exit 7; fi\"\n",
+            marker.display(),
+            marker.display()
+        ),
+    )
+    .unwrap();
+    git(root, &["add", "vership.toml"]);
+    git(root, &["commit", "-m", "chore: configure retry hook"]);
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks"])
+        .assert()
+        .failure();
+    assert!(tag_exists(root, "v0.1.6"));
+    assert!(!vership::git::remote_tag_exists(root, "v0.1.6").unwrap());
+
+    let preview = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["changelog", "patch"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview = String::from_utf8_lossy(&preview);
+    assert!(preview.contains("## [0.1.6]"), "got:\n{preview}");
+    assert!(!preview.contains("## [0.1.7]"), "got:\n{preview}");
+
+    let tag_before_dry_run = Command::new("git")
+        .args(["rev-parse", "refs/tags/v0.1.6"])
+        .current_dir(root)
+        .output()
+        .unwrap()
+        .stdout;
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--dry-run"])
+        .assert()
+        .success();
+    let tag_after_dry_run = Command::new("git")
+        .args(["rev-parse", "refs/tags/v0.1.6"])
+        .current_dir(root)
+        .output()
+        .unwrap()
+        .stdout;
+    assert_eq!(tag_before_dry_run, tag_after_dry_run);
+    assert!(!vership::git::remote_tag_exists(root, "v0.1.6").unwrap());
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks"])
+        .assert()
+        .success();
+    assert!(vership::git::remote_tag_exists(root, "v0.1.6").unwrap());
+    let remote_branch = Command::new("git")
+        .args(["rev-parse", "refs/heads/main"])
+        .current_dir(remote.path())
+        .output()
+        .unwrap()
+        .stdout;
+    let remote_tag = Command::new("git")
+        .args(["rev-parse", "v0.1.6^{}"])
+        .current_dir(remote.path())
+        .output()
+        .unwrap()
+        .stdout;
+    assert_eq!(remote_branch, remote_tag);
+}
+
+#[test]
+fn release_without_a_new_commit_retries_an_unpublished_tag() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    let remote = TempDir::new().unwrap();
+    git(remote.path(), &["init", "--bare"]);
+    git(
+        root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(root, &["push", "origin", "main", "v0.1.5"]);
+
+    let marker_dir = TempDir::new().unwrap();
+    let marker = marker_dir.path().join("allow-second-push");
+    fs::write(
+        root.join("vership.toml"),
+        format!(
+            "[hooks]\npre-push = \"if [ -f '{}' ]; then exit 0; else touch '{}'; exit 7; fi\"\n",
+            marker.display(),
+            marker.display()
+        ),
+    )
+    .unwrap();
+    fs::write(root.join("gradle.properties"), "pluginVersion=0.1.6\n").unwrap();
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n\n## [0.1.6] - 2026-09-01\n\n- manual release\n",
+    )
+    .unwrap();
+    git(
+        root,
+        &["add", "vership.toml", "gradle.properties", "CHANGELOG.md"],
+    );
+    git(root, &["commit", "-m", "chore: manually prepare release"]);
+    let head_before = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .unwrap()
+        .stdout;
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["release", "--skip-checks"])
+        .assert()
+        .failure();
+    assert!(tag_exists(root, "v0.1.6"));
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["release", "--skip-checks"])
+        .assert()
+        .success();
+    let head_after = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .unwrap()
+        .stdout;
+    assert_eq!(
+        head_before, head_after,
+        "retry must not create an empty commit"
+    );
+    assert!(vership::git::remote_tag_exists(root, "v0.1.6").unwrap());
+}
+
+#[test]
+fn manual_release_state_is_not_mistaken_for_prepare() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    let marker_dir = TempDir::new().unwrap();
+    let marker = marker_dir.path().join("hook-runs");
+    fs::write(
+        root.join("vership.toml"),
+        format!(
+            "[hooks]\npre-bump = \"printf x >> '{}'\"\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    fs::write(root.join("gradle.properties"), "pluginVersion=0.1.6\n").unwrap();
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n\n## [0.1.6] - 2026-09-01\n\n- manual notes\n",
+    )
+    .unwrap();
+    git(
+        root,
+        &["add", "vership.toml", "gradle.properties", "CHANGELOG.md"],
+    );
+    git(root, &["commit", "-m", "chore: manually prepare release"]);
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["release", "--skip-checks", "--no-push"])
+        .assert()
+        .success();
+
+    assert_eq!(fs::read_to_string(marker).unwrap(), "x");
+    assert!(tag_exists(root, "v0.1.6"));
+}
+
+#[test]
+fn pre_bump_hook_changelog_edits_are_preserved() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n## [Unreleased]\n");
+    fs::write(
+        root.join("vership.toml"),
+        "[hooks]\npre-bump = \"printf '\\n### Fixed\\n\\n- hook-curated note\\n' >> CHANGELOG.md\"\n",
+    )
+    .unwrap();
+    git(root, &["add", "vership.toml"]);
+    git(root, &["commit", "-m", "chore: configure changelog hook"]);
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--no-push"])
+        .assert()
+        .success();
+
+    let changelog = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+    let released = vership::changelog::extract_section(&changelog, "0.1.6").unwrap();
+    assert!(released.contains("- hook-curated note"), "got:\n{released}");
 }
 
 /// Drive the real `vership` binary against a CHANGELOG that carries bottom
@@ -603,6 +1049,22 @@ fn release_retags_corrected_head_after_fix_commit() {
     let root = dir.path();
     setup_committed_release_without_tag(root);
 
+    let marker_dir = TempDir::new().unwrap();
+    let hook_marker = marker_dir.path().join("replayed-hook");
+    fs::write(
+        root.join("vership.toml"),
+        format!(
+            "[hooks]\npre-bump = \"touch '{}'\"\n\n[[artifacts]]\ncommand = \"printf artifact\"\noutput = \"artifact.txt\"\n",
+            hook_marker.display()
+        ),
+    )
+    .unwrap();
+    git(root, &["add", "vership.toml"]);
+    git(
+        root,
+        &["commit", "-m", "chore: configure release side effects"],
+    );
+
     fs::write(root.join("source.txt"), "corrected").unwrap();
     git(root, &["add", "source.txt"]);
     git(root, &["commit", "-m", "fix: correct the release"]);
@@ -617,6 +1079,14 @@ fn release_retags_corrected_head_after_fix_commit() {
 
     assert!(tag_exists(root, "v0.1.6"), "tag must be re-created");
     assert_eq!(commit_count(root), commits_before, "no extra commit");
+    assert!(
+        !hook_marker.exists(),
+        "pre-bump hook must not replay after a prepared release commit"
+    );
+    assert!(
+        !root.join("artifact.txt").exists(),
+        "artifact generators must not replay after a prepared release commit"
+    );
 
     // The tag points at the corrected HEAD, not the original bump commit.
     let tag_target = Command::new("git")

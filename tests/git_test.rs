@@ -19,6 +19,19 @@ fn init_git_repo(dir: &std::path::Path) {
         .expect("git config name");
 }
 
+fn git_command(dir: &std::path::Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("git runs");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn create_commit(dir: &std::path::Path, msg: &str) {
     let file = dir.join(format!("file-{}.txt", msg.len()));
     std::fs::write(&file, msg).expect("write file");
@@ -108,7 +121,7 @@ fn has_uncommitted_changes_dirty() {
 }
 
 #[test]
-fn untracked_files_make_the_working_tree_dirty() {
+fn untracked_files_do_not_change_the_legacy_dirty_tree_helper() {
     let dir = TempDir::new().unwrap();
     init_git_repo(dir.path());
     create_commit(dir.path(), "initial");
@@ -119,7 +132,7 @@ fn untracked_files_make_the_working_tree_dirty() {
         vership::git::untracked_files(dir.path()).unwrap(),
         vec!["forgotten.txt"]
     );
-    assert!(vership::git::has_uncommitted_changes(dir.path()).unwrap());
+    assert!(!vership::git::has_uncommitted_changes(dir.path()).unwrap());
 }
 
 #[test]
@@ -152,6 +165,24 @@ fn current_branch_is_main() {
 }
 
 #[test]
+fn exact_ancestor_marker_is_not_hidden_by_a_newer_partial_mention() {
+    let dir = TempDir::new().unwrap();
+    init_git_repo(dir.path());
+    create_commit(dir.path(), "initial");
+    let marker = "Vership-Release: v1.2.3";
+    let marker_file = dir.path().join("release.txt");
+    std::fs::write(&marker_file, "release").unwrap();
+    git_command(dir.path(), &["add", "release.txt"]);
+    git_command(
+        dir.path(),
+        &["commit", "-m", "chore: release", "-m", marker],
+    );
+    create_commit(dir.path(), "docs: explain Vership-Release: v1.2.3 marker");
+
+    assert!(vership::git::ancestor_commit_has_marker(dir.path(), marker).unwrap());
+}
+
+#[test]
 fn commits_since_tag() {
     let dir = TempDir::new().unwrap();
     init_git_repo(dir.path());
@@ -178,7 +209,7 @@ fn commits_since_tag_none_gets_all() {
 }
 
 #[test]
-fn commits_since_tag_preserves_commit_bodies() {
+fn commits_since_tag_preserves_subject_only_contract() {
     let dir = TempDir::new().unwrap();
     init_git_repo(dir.path());
     std::fs::write(dir.path().join("breaking.txt"), "change").unwrap();
@@ -202,11 +233,7 @@ fn commits_since_tag_preserves_commit_bodies() {
     let commits = vership::git::commits_since_tag(dir.path(), None).unwrap();
     assert_eq!(commits.len(), 1);
     assert_eq!(commits[0].subject(), "feat: change protocol");
-    assert!(
-        commits[0]
-            .message
-            .contains("BREAKING CHANGE: clients must reconnect")
-    );
+    assert_eq!(commits[0].message, "feat: change protocol");
 }
 
 #[test]
@@ -261,6 +288,62 @@ fn remote_tag_exists_checks_origin() {
 
     assert!(vership::git::remote_tag_exists(local_dir.path(), "v1.0.0").unwrap());
     assert!(!vership::git::remote_tag_exists(local_dir.path(), "v9.9.9").unwrap());
+}
+
+#[test]
+fn push_with_tag_is_atomic_when_remote_tag_conflicts() {
+    let remote_dir = TempDir::new().unwrap();
+    let local_dir = TempDir::new().unwrap();
+    Command::new("git")
+        .args(["init", "--bare"])
+        .current_dir(remote_dir.path())
+        .output()
+        .unwrap();
+    init_git_repo(local_dir.path());
+    create_commit(local_dir.path(), "initial");
+    Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            remote_dir.path().to_str().unwrap(),
+        ])
+        .current_dir(local_dir.path())
+        .output()
+        .unwrap();
+    let branch = vership::git::current_branch(local_dir.path()).unwrap();
+    create_tag(local_dir.path(), "v1.0.0");
+    Command::new("git")
+        .args(["push", "origin", &branch, "v1.0.0"])
+        .current_dir(local_dir.path())
+        .output()
+        .unwrap();
+    let remote_before = Command::new("git")
+        .args(["rev-parse", &format!("refs/heads/{branch}")])
+        .current_dir(remote_dir.path())
+        .output()
+        .unwrap()
+        .stdout;
+
+    Command::new("git")
+        .args(["tag", "--delete", "v1.0.0"])
+        .current_dir(local_dir.path())
+        .output()
+        .unwrap();
+    create_commit(local_dir.path(), "fix: candidate");
+    create_tag(local_dir.path(), "v1.0.0");
+
+    assert!(vership::git::push_with_tag(local_dir.path(), &branch, "v1.0.0").is_err());
+    let remote_after = Command::new("git")
+        .args(["rev-parse", &format!("refs/heads/{branch}")])
+        .current_dir(remote_dir.path())
+        .output()
+        .unwrap()
+        .stdout;
+    assert_eq!(
+        remote_after, remote_before,
+        "branch push must roll back with tag"
+    );
 }
 
 #[test]

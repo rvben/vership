@@ -12,7 +12,6 @@ pub struct CheckOptions {
     pub run_tests: bool,
     pub lint_command: Option<String>,
     pub test_command: Option<String>,
-    pub allow_untracked: bool,
     /// When true, skip the "no uncommitted changes" check. Used when resuming
     /// an interrupted release where version files were already bumped.
     pub allow_uncommitted: bool,
@@ -26,7 +25,6 @@ impl Default for CheckOptions {
             run_tests: true,
             lint_command: None,
             test_command: None,
-            allow_untracked: false,
             allow_uncommitted: false,
         }
     }
@@ -38,6 +36,30 @@ pub fn run_preflight(
     tag: &str,
     project: &dyn ProjectType,
     options: &CheckOptions,
+) -> Result<()> {
+    run_preflight_with_policy(root, tag, project, options, true, None, false)
+}
+
+/// Run preflight with an explicit policy for untracked, non-ignored files.
+/// The separate argument preserves the stable `CheckOptions` public shape.
+pub fn run_preflight_with_untracked_policy(
+    root: &Path,
+    tag: &str,
+    project: &dyn ProjectType,
+    options: &CheckOptions,
+    allow_untracked: bool,
+) -> Result<()> {
+    run_preflight_with_policy(root, tag, project, options, allow_untracked, None, true)
+}
+
+pub(crate) fn run_preflight_with_policy(
+    root: &Path,
+    tag: &str,
+    project: &dyn ProjectType,
+    options: &CheckOptions,
+    allow_untracked: bool,
+    allowed_local_tag: Option<&str>,
+    check_remote_tag: bool,
 ) -> Result<()> {
     // No uncommitted changes (skipped when resuming an interrupted release)
     if options.allow_uncommitted {
@@ -52,7 +74,7 @@ pub fn run_preflight(
     // A resume permits the tracked release files that an interrupted run left
     // behind, but unrelated untracked files remain subject to the same policy.
     let untracked = git::untracked_files(root)?;
-    if !untracked.is_empty() && !options.allow_untracked {
+    if !untracked.is_empty() && !allow_untracked {
         output::print_check_fail("Untracked files detected");
         let preview = untracked
             .iter()
@@ -101,11 +123,26 @@ pub fn run_preflight(
 
     // Tag does not already exist. A duplicate tag is an incompatible-repeat
     // conflict: re-running cannot converge, so this gets its own error kind.
-    if git::tag_exists(root, tag)? {
+    if git::tag_exists(root, tag)? && allowed_local_tag != Some(tag) {
         output::print_check_fail(&format!("Tag {tag} already exists"));
         return Err(Error::Conflict(format!("tag {tag} already exists")));
     }
-    output::print_check_pass(&format!("Tag {tag} does not exist"));
+    if allowed_local_tag == Some(tag) {
+        output::print_check_pass(&format!(
+            "Tag {tag} exists locally and is confirmed unpublished"
+        ));
+    } else {
+        output::print_check_pass(&format!("Tag {tag} does not exist"));
+    }
+    if check_remote_tag && git::remote_exists(root, "origin")? {
+        if git::remote_tag_exists(root, tag)? {
+            output::print_check_fail(&format!("Tag {tag} already exists on origin"));
+            return Err(Error::Conflict(format!(
+                "tag {tag} already exists on origin; fetch and inspect it before releasing"
+            )));
+        }
+        output::print_check_pass(&format!("Tag {tag} does not exist on origin"));
+    }
 
     // Lock file in sync
     match project.verify_lockfile(root) {
@@ -155,10 +192,9 @@ fn run_shell_command(root: &Path, cmd: &str) -> Result<()> {
     // Inherit stdout/stderr so a failed check leaves the actionable compiler,
     // test, or linter diagnostic visible. This streams output without buffering
     // an arbitrarily large test log in memory.
-    let status = Command::new("sh")
-        .args(["-c", cmd])
-        .current_dir(root)
-        .status()
+    let mut command = Command::new("sh");
+    command.args(["-c", cmd]).current_dir(root);
+    let status = crate::process::status_with_stdout_to_stderr(&mut command)
         .map_err(|e| Error::Other(format!("run command '{cmd}': {e}")))?;
     if status.success() {
         Ok(())

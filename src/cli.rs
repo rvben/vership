@@ -15,7 +15,7 @@ pub enum OutputFormat {
 
 #[derive(Parser)]
 #[command(name = "vership", version, about = "Multi-target release orchestrator")]
-pub struct Cli {
+pub struct RuntimeCli {
     /// Output format: auto (default), text, or json.
     /// `auto` emits JSON when stdout is not a TTY, human-readable otherwise.
     #[arg(
@@ -32,11 +32,11 @@ pub struct Cli {
     pub json: bool,
 
     #[command(subcommand)]
-    pub command: Command,
+    pub command: RuntimeCommand,
 }
 
 #[derive(Subcommand)]
-pub enum Command {
+pub enum RuntimeCommand {
     /// Bump version per `level`, generate changelog, tag, and push.
     /// Auto-detects an interrupted prior run and continues it.
     Bump {
@@ -148,6 +148,90 @@ pub enum Command {
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
+        shell: Shell,
+    },
+}
+
+/// Stable library-facing parser retained for patch-level source compatibility.
+/// The executable uses [`RuntimeCli`] for newer command-line options.
+#[derive(Parser)]
+#[command(name = "vership", version, about = "Multi-target release orchestrator")]
+pub struct Cli {
+    #[arg(
+        long = "output",
+        short = 'o',
+        global = true,
+        value_name = "FORMAT",
+        default_value = "auto"
+    )]
+    pub output: OutputFormat,
+
+    #[arg(long, global = true, hide = true)]
+    pub json: bool,
+
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+/// Stable library-facing command shape from Vership 0.5.20.
+#[derive(Subcommand)]
+pub enum Command {
+    Bump {
+        level: BumpLevel,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        skip_checks: bool,
+        #[arg(long)]
+        no_push: bool,
+    },
+    Release {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        skip_checks: bool,
+        #[arg(long)]
+        no_push: bool,
+    },
+    Resume {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        skip_checks: bool,
+        #[arg(long)]
+        no_push: bool,
+    },
+    Changelog,
+    Preflight,
+    Status {
+        #[arg(long, default_value = "0")]
+        limit: usize,
+        #[arg(long, default_value = "0")]
+        offset: usize,
+        #[arg(long, value_name = "FIELDS")]
+        fields: Option<String>,
+    },
+    Verify {
+        version: Option<String>,
+        #[arg(long, value_name = "LIST")]
+        targets: Option<String>,
+        #[arg(long, value_name = "LIST")]
+        skip: Option<String>,
+    },
+    UpdateLocal {
+        version: Option<String>,
+        #[arg(long, value_name = "LIST")]
+        managers: Option<String>,
+        #[arg(long, value_name = "LIST")]
+        skip: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    #[command(subcommand)]
+    Config(ConfigCommand),
+    Schema,
+    Capabilities,
+    Completions {
         shell: Shell,
     },
 }

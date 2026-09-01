@@ -19,6 +19,34 @@ fn project_root() -> Result<PathBuf> {
         .map_err(|e| Error::Other(format!("failed to get current directory: {e}")))
 }
 
+fn read_optional_text(path: &std::path::Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Error::Io(error)),
+    }
+}
+
+fn unpublished_release_tag(
+    root: &std::path::Path,
+    version: &semver::Version,
+) -> Result<Option<String>> {
+    let tag = format!("v{version}");
+    if !git::tag_exists(root, &tag)? {
+        return Ok(None);
+    }
+    if git::remote_exists(root, "origin")? && git::remote_tag_exists(root, &tag)? {
+        return Ok(None);
+    }
+    let release_marker = format!("Vership-Release: {tag}");
+    let marked_release = git::tag_message(root, &tag)?
+        .is_some_and(|message| message.lines().any(|line| line.trim() == release_marker));
+    if marked_release && git::tag_points_to_head(root, &tag)? {
+        return Ok(Some(tag));
+    }
+    Ok(None)
+}
+
 pub fn status(
     output: &OutputConfig,
     limit: usize,
@@ -131,6 +159,7 @@ pub fn preflight() -> Result<()> {
 pub fn preflight_for(level: BumpLevel) -> Result<()> {
     let root = project_root()?;
     let config = Config::load_checked(&root.join("vership.toml"))?;
+    let allow_untracked = Config::load_allow_untracked(&root.join("vership.toml"))?;
     let project = project::detect(&root, config.project.project_type.as_deref())?;
     let current_version = project.read_version(&root)?;
     let new_version = version::bump(current_version, level);
@@ -142,11 +171,16 @@ pub fn preflight_for(level: BumpLevel) -> Result<()> {
         run_tests: config.checks.tests,
         lint_command: config.checks.lint_command.clone(),
         test_command: config.checks.test_command.clone(),
-        allow_untracked: config.checks.allow_untracked,
         allow_uncommitted: false,
     };
 
-    checks::run_preflight(&root, &tag, project.as_ref(), &options)?;
+    checks::run_preflight_with_untracked_policy(
+        &root,
+        &tag,
+        project.as_ref(),
+        &options,
+        allow_untracked,
+    )?;
     eprintln!("\nAll checks passed. Ready to release.");
     Ok(())
 }
@@ -162,11 +196,29 @@ pub fn changelog_preview_for(level: BumpLevel) -> Result<()> {
     let config = Config::load_checked(&root.join("vership.toml"))?;
     let project = project::detect(&root, config.project.project_type.as_deref())?;
     let current_version = project.read_version(&root)?;
-    let latest_tag = git::latest_semver_tag(&root)?;
-    let commits = git::commits_since_tag(&root, latest_tag.as_deref())?;
+    let recovery_tag = unpublished_release_tag(&root, &current_version)?;
+    let latest_tag = match recovery_tag.as_deref() {
+        Some(tag) => git::latest_semver_tag_excluding(&root, tag)?,
+        None => git::latest_semver_tag(&root)?,
+    };
+    let commits = git::changelog_commits_since_tag(&root, latest_tag.as_deref())?;
     let remote_url = git::remote_url(&root)?;
 
-    let next_version = version::bump(current_version, level);
+    let requested_plan = ReleasePlan::bump(
+        current_version.clone(),
+        latest_tag.as_deref(),
+        level,
+        git::has_tracked_changes(&root)?,
+    );
+    let current_tag = format!("v{current_version}");
+    let prepared_current = recovery_tag.is_some()
+        || (!git::tag_exists(&root, &current_tag)?
+            && git::ancestor_commit_has_marker(&root, &format!("Vership-Release: {current_tag}"))?);
+    let next_version = if prepared_current {
+        current_version
+    } else {
+        requested_plan.target
+    };
     let generated = changelog::generate_changelog_with_mode(
         &commits,
         &next_version.to_string(),
@@ -176,7 +228,18 @@ pub fn changelog_preview_for(level: BumpLevel) -> Result<()> {
     )
     .map_err(Error::CheckFailed)?;
 
-    let existing = std::fs::read_to_string(root.join("CHANGELOG.md")).ok();
+    let existing = read_optional_text(&root.join("CHANGELOG.md"))?;
+    if let Some(section) = existing.as_deref().and_then(|content| {
+        if changelog::version_exists_in_changelog(content, &next_version.to_string()) {
+            changelog::extract_section(content, &next_version.to_string())
+        } else {
+            None
+        }
+    }) {
+        println!("{section}");
+        return Ok(());
+    }
+
     let update = changelog::integrate_changelog_checked(existing.as_deref(), &generated)
         .map_err(Error::CheckFailed)?;
     if update.promoted {
@@ -220,12 +283,20 @@ pub fn bump_with_prepare(
     let project = project::detect(&root, config.project.project_type.as_deref())?;
 
     let on_disk = project.read_version(&root)?;
-    let latest_tag = git::latest_semver_tag(&root)?;
+    let recovery_tag = unpublished_release_tag(&root, &on_disk)?;
+    let latest_tag = match recovery_tag.as_deref() {
+        Some(tag) => git::latest_semver_tag_excluding(&root, tag)?,
+        None => git::latest_semver_tag(&root)?,
+    };
     // Resume detection is based on tracked release files only. An unrelated
     // untracked path must never turn a fresh bump into an interrupted release.
     let has_uncommitted = git::has_tracked_changes(&root)?;
 
-    let plan = ReleasePlan::bump(on_disk, latest_tag.as_deref(), level, has_uncommitted);
+    let plan = if recovery_tag.is_some() {
+        ReleasePlan::release_current(on_disk, latest_tag.as_deref())?
+    } else {
+        ReleasePlan::bump(on_disk, latest_tag.as_deref(), level, has_uncommitted)
+    };
     execute(
         plan,
         ExecOpts {
@@ -234,6 +305,7 @@ pub fn bump_with_prepare(
             no_push,
         },
         prepare,
+        recovery_tag,
     )
 }
 
@@ -256,7 +328,11 @@ pub fn release_current_with_prepare(
     let project = project::detect(&root, config.project.project_type.as_deref())?;
 
     let on_disk = project.read_version(&root)?;
-    let latest_tag = git::latest_semver_tag(&root)?;
+    let recovery_tag = unpublished_release_tag(&root, &on_disk)?;
+    let latest_tag = match recovery_tag.as_deref() {
+        Some(tag) => git::latest_semver_tag_excluding(&root, tag)?,
+        None => git::latest_semver_tag(&root)?,
+    };
 
     let plan = ReleasePlan::release_current(on_disk, latest_tag.as_deref())?;
     execute(
@@ -267,6 +343,7 @@ pub fn release_current_with_prepare(
             no_push,
         },
         prepare,
+        recovery_tag,
     )
 }
 
@@ -289,7 +366,11 @@ pub fn resume_with_prepare(
     let project = project::detect(&root, config.project.project_type.as_deref())?;
 
     let on_disk = project.read_version(&root)?;
-    let latest_tag = git::latest_semver_tag(&root)?;
+    let recovery_tag = unpublished_release_tag(&root, &on_disk)?;
+    let latest_tag = match recovery_tag.as_deref() {
+        Some(tag) => git::latest_semver_tag_excluding(&root, tag)?,
+        None => git::latest_semver_tag(&root)?,
+    };
 
     let plan = ReleasePlan::resume(on_disk, latest_tag.as_deref())?;
     execute(
@@ -300,14 +381,21 @@ pub fn resume_with_prepare(
             no_push,
         },
         prepare,
+        recovery_tag,
     )
 }
 
 /// Single linear orchestrator. Runs preflight, optionally writes the version,
 /// generates changelog, commits, tags, and pushes.
-fn execute(plan: ReleasePlan, opts: ExecOpts, prepare: bool) -> Result<()> {
+fn execute(
+    plan: ReleasePlan,
+    opts: ExecOpts,
+    prepare: bool,
+    recovery_tag: Option<String>,
+) -> Result<()> {
     let root = project_root()?;
     let config = Config::load_checked(&root.join("vership.toml"))?;
+    let allow_untracked = Config::load_allow_untracked(&root.join("vership.toml"))?;
     let project = project::detect(&root, config.project.project_type.as_deref())?;
     let tag = plan.tag();
 
@@ -325,29 +413,44 @@ fn execute(plan: ReleasePlan, opts: ExecOpts, prepare: bool) -> Result<()> {
         run_tests: !opts.skip_checks && config.checks.tests,
         lint_command: config.checks.lint_command.clone(),
         test_command: config.checks.test_command.clone(),
-        allow_untracked: config.checks.allow_untracked,
         allow_uncommitted: plan.allow_dirty_tree,
     };
-    checks::run_preflight(&root, &tag, project.as_ref(), &check_options)?;
+    checks::run_preflight_with_policy(
+        &root,
+        &tag,
+        project.as_ref(),
+        &check_options,
+        allow_untracked,
+        recovery_tag.as_deref(),
+        true,
+    )?;
 
     let changelog_path = root.join("CHANGELOG.md");
-    let existing = std::fs::read_to_string(&changelog_path).ok();
-    let release_commit_already_prepared = plan.mutation == Mutation::None
+    let prepared_existing = read_optional_text(&changelog_path)?;
+    let release_marker = format!("Vership-Release: {tag}");
+    let history_has_release_marker = git::ancestor_commit_has_marker(&root, &release_marker)?;
+    let release_work_already_done = plan.mutation == Mutation::None
         && !git::has_tracked_changes(&root)?
-        && existing.as_deref().is_some_and(|content| {
+        && (history_has_release_marker || recovery_tag.as_deref() == Some(tag.as_str()))
+        && prepared_existing.as_deref().is_some_and(|content| {
             changelog::version_exists_in_changelog(content, &plan.target.to_string())
         });
 
-    // A clean tree with the target version already present in the changelog is
-    // the state produced by `--prepare` (and by an interrupted run after its
-    // commit succeeded). Do not replay bump hooks or artifact generators: they
-    // may have external or non-idempotent side effects. Only the tag/push phase
-    // remains.
-    if release_commit_already_prepared {
+    if recovery_tag.is_some() && !release_work_already_done {
+        return Err(Error::CheckFailed(format!(
+            "local tag {tag} is marked as an unpublished Vership release, but the clean release state cannot be verified; leave the tag in place and inspect HEAD, the version, and CHANGELOG.md"
+        )));
+    }
+
+    // Release commits carry an explicit marker so a manually committed version
+    // and changelog can never be mistaken for `--prepare`. For marked commits,
+    // do not replay bump hooks or artifact generators: they may have external
+    // or non-idempotent side effects. Only the tag/push phase remains.
+    if release_work_already_done {
         output::print_step("Nothing to commit (release commit already exists)");
         if opts.dry_run {
             eprintln!("\n--- Dry run: no changes made ---");
-            if let Some(preview) = existing
+            if let Some(preview) = prepared_existing
                 .as_deref()
                 .and_then(|content| changelog::extract_section(content, &plan.target.to_string()))
             {
@@ -356,6 +459,10 @@ fn execute(plan: ReleasePlan, opts: ExecOpts, prepare: bool) -> Result<()> {
             }
             return Ok(());
         }
+        if recovery_tag.is_some() {
+            git::delete_local_tag(&root, &tag)?;
+            output::print_step(&format!("Recovering unpublished local tag: {tag}"));
+        }
         return finish_release(&root, &config, &tag, opts.no_push, prepare);
     }
 
@@ -363,6 +470,10 @@ fn execute(plan: ReleasePlan, opts: ExecOpts, prepare: bool) -> Result<()> {
     if !opts.dry_run {
         hooks::run_hook(&root, "pre-bump", config.hooks.pre_bump.as_deref())?;
     }
+
+    // Hooks are allowed to curate the changelog. Read it only after pre-bump
+    // has completed so those edits become the source for integration.
+    let existing = read_optional_text(&changelog_path)?;
 
     // Mutation: write version into manifest + apply version_files (when planned).
     let on_disk = project.read_version(&root)?;
@@ -427,7 +538,7 @@ fn execute(plan: ReleasePlan, opts: ExecOpts, prepare: bool) -> Result<()> {
     };
 
     // Changelog
-    let commits = git::commits_since_tag(&root, plan.previous_tag.as_deref())?;
+    let commits = git::changelog_commits_since_tag(&root, plan.previous_tag.as_deref())?;
     let remote_url = git::remote_url(&root)?;
 
     let changelog_section = changelog::generate_changelog_with_mode(
@@ -458,8 +569,18 @@ fn execute(plan: ReleasePlan, opts: ExecOpts, prepare: bool) -> Result<()> {
 
     let entry_count = commits
         .iter()
-        .filter_map(|c| changelog::parse_conventional_commit(&c.message))
-        .filter(|cc| matches!(cc.commit_type.as_str(), "feat" | "fix" | "perf" | "change"))
+        .filter(|commit| {
+            if commit.message.starts_with("Merge ") {
+                return false;
+            }
+            match changelog::parse_conventional_commit(&commit.message) {
+                Some(cc) => {
+                    cc.breaking
+                        || matches!(cc.commit_type.as_str(), "feat" | "fix" | "perf" | "change")
+                }
+                None => config.changelog.unconventional == "include",
+            }
+        })
         .count();
     if changelog_already_written {
         output::print_step(&format!(
@@ -519,13 +640,14 @@ fn execute(plan: ReleasePlan, opts: ExecOpts, prepare: bool) -> Result<()> {
     // version bump and changelog already landed in a prior run. Skip the
     // empty commit and proceed to the tag, which is the step that remains.
     if git::has_staged_changes(&root)? {
-        let commit_msg = if project.is_tag_versioned() {
+        let subject = if project.is_tag_versioned() {
             format!("chore: release {tag}")
         } else {
             format!("chore: bump version to {tag}")
         };
+        let commit_msg = format!("{subject}\n\n{release_marker}");
         git::commit(&root, &commit_msg)?;
-        output::print_step(&format!("Committed: {commit_msg}"));
+        output::print_step(&format!("Committed: {subject}"));
     } else {
         output::print_step("Nothing to commit (release commit already exists)");
     }

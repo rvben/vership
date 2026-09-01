@@ -72,8 +72,6 @@ pub struct ArtifactEntry {
 pub struct ChecksConfig {
     pub lint: bool,
     pub tests: bool,
-    /// Permit untracked, non-ignored files during release preflight.
-    pub allow_untracked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lint_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -120,11 +118,22 @@ impl Default for ChecksConfig {
         Self {
             lint: true,
             tests: true,
-            allow_untracked: false,
             lint_command: None,
             test_command: None,
         }
     }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct SafetyConfig {
+    checks: SafetyChecks,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct SafetyChecks {
+    allow_untracked: bool,
 }
 
 impl Config {
@@ -132,7 +141,28 @@ impl Config {
         if content.trim().is_empty() {
             return Ok(Self::default());
         }
-        toml::from_str(content).map_err(|e| Error::Config(format!("parse vership.toml: {e}")))
+        let config: Self = toml::from_str(content)
+            .map_err(|e| Error::Config(format!("parse vership.toml: {e}")))?;
+        let _: SafetyConfig = toml::from_str(content)
+            .map_err(|e| Error::Config(format!("parse vership.toml: {e}")))?;
+        match config.changelog.unconventional.as_str() {
+            "exclude" | "include" | "strict" => Ok(config),
+            value => Err(Error::Config(format!(
+                "changelog.unconventional must be exclude, include, or strict; got {value:?}"
+            ))),
+        }
+    }
+
+    /// Read the release-safety opt-out without expanding the stable public
+    /// `ChecksConfig` shape in a patch release.
+    pub fn load_allow_untracked(path: &Path) -> Result<bool> {
+        match std::fs::read_to_string(path) {
+            Ok(content) => toml::from_str::<SafetyConfig>(&content)
+                .map(|config| config.checks.allow_untracked)
+                .map_err(|e| Error::Config(format!("parse vership.toml: {e}"))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(Error::Io(error)),
+        }
     }
 
     /// Load configuration and report malformed or unreadable files.
@@ -146,29 +176,56 @@ impl Config {
 
     /// Compatibility wrapper for library users. CLI paths use `load_checked`
     /// and fail closed; new callers should do the same.
-    #[deprecated(
-        since = "0.5.21",
-        note = "use Config::load_checked to handle invalid files"
-    )]
+    /// Legacy fail-open loader retained for patch-line compatibility. New CLI
+    /// code uses [`Config::load_checked`] so malformed release policy fails.
     pub fn load(path: &Path) -> Self {
-        Self::load_checked(path).unwrap_or_else(|error| {
-            eprintln!("Warning: {error}; using default configuration");
-            Self::default()
-        })
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|content| Self::parse(&content).ok())
+            .unwrap_or_default()
     }
 }
 
 pub fn show(output: &crate::output::OutputConfig) -> Result<()> {
     let path = Path::new("vership.toml");
     let config = Config::load_checked(path)?;
+    let allow_untracked = Config::load_allow_untracked(path)?;
     if output.is_json() {
+        let mut value = serde_json::to_value(&config).map_err(|e| Error::Config(e.to_string()))?;
+        let checks = value
+            .as_object_mut()
+            .ok_or_else(|| Error::Config("serialized config is not an object".to_string()))?
+            .entry("checks")
+            .or_insert_with(|| serde_json::json!({}));
+        checks
+            .as_object_mut()
+            .ok_or_else(|| Error::Config("serialized checks config is not an object".to_string()))?
+            .insert(
+                "allow_untracked".to_string(),
+                serde_json::json!(allow_untracked),
+            );
         println!(
             "{}",
-            serde_json::to_string_pretty(&config).map_err(|e| Error::Config(e.to_string()))?
+            serde_json::to_string_pretty(&value).map_err(|e| Error::Config(e.to_string()))?
         );
     } else {
-        let toml = toml::to_string_pretty(&config).map_err(|e| Error::Config(e.to_string()))?;
-        print!("{toml}");
+        let mut value = toml::Value::try_from(&config).map_err(|e| Error::Config(e.to_string()))?;
+        let checks = value
+            .as_table_mut()
+            .ok_or_else(|| Error::Config("serialized config is not a table".to_string()))?
+            .entry("checks")
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+        checks
+            .as_table_mut()
+            .ok_or_else(|| Error::Config("serialized checks config is not a table".to_string()))?
+            .insert(
+                "allow_untracked".to_string(),
+                toml::Value::Boolean(allow_untracked),
+            );
+        print!(
+            "{}",
+            toml::to_string_pretty(&value).map_err(|e| Error::Config(e.to_string()))?
+        );
     }
     Ok(())
 }

@@ -1,6 +1,6 @@
 use vership::changelog::{
     ConventionalCommit, extract_section, generate_changelog, generate_changelog_with_mode,
-    integrate_changelog_checked, parse_conventional_commit,
+    integrate_changelog_checked, parse_conventional_commit, version_exists_in_changelog,
 };
 use vership::git::Commit;
 
@@ -44,6 +44,15 @@ fn parse_breaking_change_footer_from_full_commit_message() {
     .unwrap();
     assert!(cc.breaking);
     assert_eq!(cc.description, "replace token format");
+}
+
+#[test]
+fn indented_breaking_change_example_is_not_a_footer() {
+    let parsed = parse_conventional_commit(
+        "docs: explain commit messages\n\nExample:\n    BREAKING CHANGE: describe impact",
+    )
+    .unwrap();
+    assert!(!parsed.breaking);
 }
 
 #[test]
@@ -445,7 +454,16 @@ fn integrate_rejects_ambiguous_unreleased_headings() {
     let existing = "# Changelog\n\n## [Unreleased]\n\n## Unreleased\n";
     let error = integrate_changelog_checked(Some(existing), "## [1.0.0] - 2026-05-22\n")
         .expect_err("duplicate release-note sources must fail closed");
-    assert!(error.contains("multiple Unreleased headings"));
+    assert!(error.contains("multiple Unreleased-like headings"));
+}
+
+#[test]
+fn integrate_rejects_valid_and_malformed_unreleased_headings_together() {
+    let existing =
+        "# Changelog\n\n## [Unreleased]\n\n- valid\n\n## Unreleased changes\n\n- stranded\n";
+    let error = integrate_changelog_checked(Some(existing), "## [1.0.0] - 2026-05-22\n")
+        .expect_err("every Unreleased-like heading must be classified");
+    assert!(error.contains("multiple Unreleased-like headings"));
 }
 
 #[test]
@@ -454,6 +472,72 @@ fn integrate_rejects_malformed_unreleased_heading() {
     let error = integrate_changelog_checked(Some(existing), "## [1.0.0] - 2026-05-22\n")
         .expect_err("a plausible but unsupported heading must not be ignored");
     assert!(error.contains("unsupported Unreleased heading"));
+}
+
+#[test]
+fn checked_integration_ignores_unreleased_examples_in_fenced_code() {
+    let existing = "# Changelog\n\n```md\n## [Unreleased]\n```\n\n## [0.9.0] - 2026-01-01\n";
+    let section = "## [1.0.0] - 2026-09-01\n\n- shipped\n";
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
+
+    assert!(!result.promoted);
+    let example = result.content.find("```md").unwrap();
+    let release = result.content.find("## [1.0.0]").unwrap();
+    let prior = result.content.find("## [0.9.0]").unwrap();
+    assert!(example < release && release < prior);
+    assert_eq!(result.content.matches("## [1.0.0]").count(), 1);
+}
+
+#[test]
+fn fenced_h2_examples_do_not_end_curated_or_released_sections() {
+    let existing = "# Changelog\n\n## [Unreleased]\n\n- before\n\n```md\n## Example\n```\n\n- after\n\n## [0.9.0] - 2026-01-01\n";
+    let section = "## [1.0.0] - 2026-09-01\n\n- generated\n";
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
+    let released = extract_section(&result.content, "1.0.0").unwrap();
+
+    assert!(released.contains("- before"));
+    assert!(released.contains("## Example"));
+    assert!(released.contains("- after"));
+    assert!(!released.contains("## [0.9.0]"));
+}
+
+#[test]
+fn shorter_fence_runs_do_not_close_a_longer_fence() {
+    let existing =
+        "# Changelog\n\n````md\n```\n## [Unreleased]\n```\n````\n\n## [0.9.0] - 2026-01-01\n";
+    let section = "## [1.0.0] - 2026-09-01\n\n- shipped\n";
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
+
+    assert!(!result.promoted);
+    let outer_fence = result.content.find("````md").unwrap();
+    let release = result.content.find("## [1.0.0]").unwrap();
+    let prior = result.content.find("## [0.9.0]").unwrap();
+    assert!(outer_fence < release && release < prior);
+}
+
+#[test]
+fn promotion_preserves_version_like_links_inside_fenced_examples() {
+    let existing = "# Changelog\n\n## [Unreleased]\n\n```md\n[1.2.3]: https://example.test/version\n[Unreleased]: https://example.test/unreleased\n```\n\n[1.2.3]: https://stale.test/version\n[Unreleased]: https://stale.test/unreleased\n";
+    let section = "## [1.0.0] - 2026-09-01\n\n- generated\n";
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
+    let released = extract_section(&result.content, "1.0.0").unwrap();
+
+    assert!(released.contains("[1.2.3]: https://example.test/version"));
+    assert!(released.contains("[Unreleased]: https://example.test/unreleased"));
+    assert!(!result.content.contains("https://stale.test"));
+}
+
+#[test]
+fn legacy_integration_remains_permissive_for_malformed_headings() {
+    let existing = "# Changelog\n\n## [Unreleased notes]\n\n- legacy input\n";
+    let result = vership::changelog::integrate_changelog(
+        Some(existing),
+        "## [1.0.0] - 2026-09-01\n\n- shipped\n",
+    );
+
+    assert!(!result.promoted);
+    assert!(result.content.contains("## [1.0.0]"));
+    assert!(result.content.contains("## [Unreleased notes]"));
 }
 
 #[test]
@@ -780,4 +864,20 @@ fn prepend_puts_the_new_release_above_a_changelog_that_opens_with_a_heading() {
         "no leading blank line when there is no preamble, got:\n{}",
         result.content
     );
+}
+
+#[test]
+fn version_detection_requires_an_exact_heading() {
+    assert!(version_exists_in_changelog(
+        "## [1.2.3] - 2026-09-01\n",
+        "1.2.3"
+    ));
+    assert!(!version_exists_in_changelog(
+        "```md\n## [1.2.3]\n```\n",
+        "1.2.3"
+    ));
+    assert!(!version_exists_in_changelog(
+        "## [1.2.30] - 2026-09-01\n",
+        "1.2.3"
+    ));
 }

@@ -73,10 +73,9 @@ impl ProjectType for PythonProject {
 
     fn sync_lockfile(&self, root: &Path) -> Result<()> {
         if root.join("uv.lock").exists() {
-            let status = std::process::Command::new("uv")
-                .args(["lock"])
-                .current_dir(root)
-                .status()
+            let mut command = std::process::Command::new("uv");
+            command.args(["lock"]).current_dir(root);
+            let status = crate::process::status_with_stdout_to_stderr(&mut command)
                 .map_err(|e| Error::Other(format!("run uv lock: {e}")))?;
             if !status.success() {
                 return Err(Error::CheckFailed(
@@ -84,10 +83,9 @@ impl ProjectType for PythonProject {
                 ));
             }
         } else if root.join("poetry.lock").exists() {
-            let status = std::process::Command::new("poetry")
-                .args(["lock", "--no-update"])
-                .current_dir(root)
-                .status()
+            let mut command = std::process::Command::new("poetry");
+            command.args(["lock", "--no-update"]).current_dir(root);
+            let status = crate::process::status_with_stdout_to_stderr(&mut command)
                 .map_err(|e| Error::Other(format!("run poetry lock: {e}")))?;
             if !status.success() {
                 return Err(Error::CheckFailed(

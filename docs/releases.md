@@ -32,7 +32,10 @@ vership release
 ```
 
 `--prepare` never creates or pushes a tag. `vership release` converges from the
-reviewed commit and performs the remaining tag and push steps.
+reviewed, explicitly marked commit and performs the remaining tag and atomic
+push steps. If the first push attempt fails before origin receives the tag,
+rerun the same command; Vership recovers its unpublished local tag and retries
+the same version.
 
 ## Failure policy
 

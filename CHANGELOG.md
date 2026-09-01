@@ -17,8 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **changelog**: promote bracketed and unbracketed Unreleased headings and fail closed on ambiguous headings
 - **changelog**: make previews use the exact release rendering path and disclose replaced generated entries
 - **changelog**: recognize `BREAKING CHANGE` footers and avoid duplicating breaking entries
+- **changelog**: preserve hook-authored notes, reject mixed valid/malformed headings, and bound commit-message memory
 - **checks**: preserve diagnostics from failed lint, test, and lockfile commands
-- **config**: reject malformed configuration instead of silently using defaults
+- **checks**: route child output to stderr so command stdout remains machine-readable
+- **ci**: update the dependency updater to handle duplicate package names during lockfile refresh
+- **config**: reject malformed configuration and invalid changelog policies instead of silently using defaults
+- **release**: publish branch and tag atomically, detect remote conflicts, and recover unpublished local tags
+- **release**: distinguish prepared commits explicitly without breaking the 0.5.x public Rust API
 - **release**: reject untracked files by default and report the actual branch in push instructions
 
 ## [0.5.20](https://github.com/rvben/vership/compare/v0.5.19...v0.5.20) - 2026-08-25

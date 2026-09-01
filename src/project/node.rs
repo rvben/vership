@@ -101,10 +101,9 @@ impl ProjectType for NodeProject {
             _ => return Ok(()),
         };
 
-        let status = std::process::Command::new(program)
-            .args(args)
-            .current_dir(root)
-            .status()
+        let mut command = std::process::Command::new(program);
+        command.args(args).current_dir(root);
+        let status = crate::process::status_with_stdout_to_stderr(&mut command)
             .map_err(|e| Error::Other(format!("run {program}: {e}")))?;
 
         if status.success() {
@@ -129,10 +128,9 @@ impl ProjectType for NodeProject {
             _ => ("npm", &["run", "lint"]),
         };
 
-        let status = std::process::Command::new(program)
-            .args(args)
-            .current_dir(root)
-            .status()
+        let mut command = std::process::Command::new(program);
+        command.args(args).current_dir(root);
+        let status = crate::process::status_with_stdout_to_stderr(&mut command)
             .map_err(|e| Error::Other(format!("run {program} lint: {e}")))?;
 
         if status.success() {
@@ -155,10 +153,9 @@ impl ProjectType for NodeProject {
             _ => ("npm", &["test"]),
         };
 
-        let status = std::process::Command::new(program)
-            .args(args)
-            .current_dir(root)
-            .status()
+        let mut command = std::process::Command::new(program);
+        command.args(args).current_dir(root);
+        let status = crate::process::status_with_stdout_to_stderr(&mut command)
             .map_err(|e| Error::Other(format!("run {program} test: {e}")))?;
 
         if status.success() {

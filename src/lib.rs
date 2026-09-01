@@ -8,6 +8,7 @@ pub mod git;
 pub mod hooks;
 pub mod output;
 pub mod planning;
+pub(crate) mod process;
 pub mod project;
 pub mod release;
 pub mod schema;
