@@ -43,8 +43,6 @@ impl ProjectType for GoProject {
         let status = std::process::Command::new("go")
             .args(["mod", "verify"])
             .current_dir(root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| Error::Other(format!("run go mod verify: {e}")))?;
         if status.success() {
@@ -60,8 +58,6 @@ impl ProjectType for GoProject {
         let status = std::process::Command::new("go")
             .args(["mod", "tidy"])
             .current_dir(root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| Error::Other(format!("run go mod tidy: {e}")))?;
         if status.success() {
@@ -77,8 +73,6 @@ impl ProjectType for GoProject {
         let status = std::process::Command::new("go")
             .args(["vet", "./..."])
             .current_dir(root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| Error::Other(format!("run go vet: {e}")))?;
         if status.success() {
@@ -92,8 +86,6 @@ impl ProjectType for GoProject {
         let status = std::process::Command::new("go")
             .args(["test", "./..."])
             .current_dir(root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| Error::Other(format!("run go test: {e}")))?;
         if status.success() {

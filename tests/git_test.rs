@@ -108,6 +108,34 @@ fn has_uncommitted_changes_dirty() {
 }
 
 #[test]
+fn untracked_files_make_the_working_tree_dirty() {
+    let dir = TempDir::new().unwrap();
+    init_git_repo(dir.path());
+    create_commit(dir.path(), "initial");
+    std::fs::write(dir.path().join("forgotten.txt"), "not released").unwrap();
+
+    assert!(!vership::git::has_tracked_changes(dir.path()).unwrap());
+    assert_eq!(
+        vership::git::untracked_files(dir.path()).unwrap(),
+        vec!["forgotten.txt"]
+    );
+    assert!(vership::git::has_uncommitted_changes(dir.path()).unwrap());
+}
+
+#[test]
+fn untracked_file_names_are_nul_delimited() {
+    let dir = TempDir::new().unwrap();
+    init_git_repo(dir.path());
+    create_commit(dir.path(), "initial");
+    std::fs::write(dir.path().join("line\nbreak.txt"), "unusual but valid").unwrap();
+
+    assert_eq!(
+        vership::git::untracked_files(dir.path()).unwrap(),
+        vec!["line\nbreak.txt"]
+    );
+}
+
+#[test]
 fn current_branch_is_main() {
     let dir = TempDir::new().unwrap();
     init_git_repo(dir.path());
@@ -147,6 +175,38 @@ fn commits_since_tag_none_gets_all() {
 
     let commits = vership::git::commits_since_tag(dir.path(), None).unwrap();
     assert_eq!(commits.len(), 2);
+}
+
+#[test]
+fn commits_since_tag_preserves_commit_bodies() {
+    let dir = TempDir::new().unwrap();
+    init_git_repo(dir.path());
+    std::fs::write(dir.path().join("breaking.txt"), "change").unwrap();
+    Command::new("git")
+        .args(["add", "breaking.txt"])
+        .current_dir(dir.path())
+        .output()
+        .expect("git add");
+    Command::new("git")
+        .args([
+            "commit",
+            "-m",
+            "feat: change protocol",
+            "-m",
+            "BREAKING CHANGE: clients must reconnect",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .expect("git commit");
+
+    let commits = vership::git::commits_since_tag(dir.path(), None).unwrap();
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0].subject(), "feat: change protocol");
+    assert!(
+        commits[0]
+            .message
+            .contains("BREAKING CHANGE: clients must reconnect")
+    );
 }
 
 #[test]

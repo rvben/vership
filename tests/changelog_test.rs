@@ -1,6 +1,6 @@
 use vership::changelog::{
     ConventionalCommit, extract_section, generate_changelog, generate_changelog_with_mode,
-    integrate_changelog, parse_conventional_commit,
+    integrate_changelog_checked, parse_conventional_commit,
 };
 use vership::git::Commit;
 
@@ -34,6 +34,16 @@ fn parse_breaking_with_scope_and_bang() {
     let cc = parse_conventional_commit("fix(auth)!: require token refresh").unwrap();
     assert!(cc.breaking);
     assert_eq!(cc.scope.as_deref(), Some("auth"));
+}
+
+#[test]
+fn parse_breaking_change_footer_from_full_commit_message() {
+    let cc = parse_conventional_commit(
+        "feat(api): replace token format\n\nBREAKING CHANGE: old tokens are no longer accepted",
+    )
+    .unwrap();
+    assert!(cc.breaking);
+    assert_eq!(cc.description, "replace token format");
 }
 
 #[test]
@@ -102,6 +112,11 @@ fn changelog_breaking_changes_at_top() {
     let breaking_pos = changelog.find("### Breaking Changes").unwrap();
     let added_pos = changelog.find("### Added").unwrap();
     assert!(breaking_pos < added_pos);
+    assert_eq!(
+        changelog.matches("remove legacy API").count(),
+        1,
+        "a breaking feature must not be duplicated under Added"
+    );
 }
 
 #[test]
@@ -333,12 +348,12 @@ fn exclude_mode_silently_skips_non_conventional() {
     assert!(!changelog.contains("This is not conventional"));
 }
 
-// --- integrate_changelog: [Unreleased] promotion ---
+// --- integrate_changelog_checked: [Unreleased] promotion ---
 
 #[test]
 fn integrate_no_existing_file_creates_header() {
     let section = "## [1.0.0] - 2026-05-22\n\n### Added\n\n- thing\n";
-    let result = integrate_changelog(None, section);
+    let result = integrate_changelog_checked(None, section).unwrap();
     assert!(result.content.starts_with("# Changelog"));
     assert!(result.content.contains("## [1.0.0] - 2026-05-22"));
     assert!(
@@ -351,7 +366,7 @@ fn integrate_no_existing_file_creates_header() {
 fn integrate_without_unreleased_prepends_above_latest() {
     let existing = "# Changelog\n\n## [0.9.0] - 2026-01-01\n\n### Added\n\n- old\n";
     let section = "## [1.0.0] - 2026-05-22\n\n### Added\n\n- new\n";
-    let result = integrate_changelog(Some(existing), section);
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
 
     let new_pos = result.content.find("## [1.0.0]").unwrap();
     let old_pos = result.content.find("## [0.9.0]").unwrap();
@@ -371,7 +386,7 @@ fn integrate_promotes_curated_unreleased_content() {
     let existing = "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- hand written fix\n\n## [0.1.5] - 2026-05-01\n\n### Added\n\n- prior\n";
     // Generated section body is intentionally different to prove curated content wins.
     let section = "## [0.1.6](https://example.com/compare/v0.1.5...v0.1.6) - 2026-05-22\n\n### Added\n\n- generated entry that should NOT appear\n";
-    let result = integrate_changelog(Some(existing), section);
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
 
     // A fresh empty [Unreleased] sits at the top.
     let unreleased_pos = result.content.find("## [Unreleased]").unwrap();
@@ -394,6 +409,51 @@ fn integrate_promotes_curated_unreleased_content() {
             .contains("generated entry that should NOT appear")
     );
     assert!(result.promoted, "curated content was promoted");
+    assert_eq!(result.replaced_generated_entries, 1);
+}
+
+#[test]
+fn integrate_promotes_unbracketed_unreleased_content() {
+    let existing = "# Changelog\n\n## Unreleased\n\n### Added\n\n- hand written analytics\n\n## [0.1.5] - 2026-05-01\n";
+    let section = "## [0.1.6] - 2026-05-22\n\n### Fixed\n\n- generated fix\n";
+
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
+
+    assert!(result.promoted);
+    assert!(result.content.contains("## [0.1.6] - 2026-05-22"));
+    assert!(result.content.contains("- hand written analytics"));
+    assert!(!result.content.contains("- generated fix"));
+    assert_eq!(result.content.matches("## [Unreleased]").count(), 1);
+}
+
+#[test]
+fn integrate_handles_flexible_heading_whitespace_and_crlf() {
+    let existing =
+        "# Changelog\r\n\r\n##\tUnreleased\r\n\r\n- curated\r\n\r\n##   [0.9.0]\r\n\r\n- prior\r\n";
+    let result =
+        integrate_changelog_checked(Some(existing), "## [1.0.0] - 2026-05-22\n\n- generated\n")
+            .unwrap();
+
+    let release = extract_section(&result.content, "1.0.0").unwrap();
+    assert!(release.contains("- curated"));
+    assert!(!release.contains("##   [0.9.0]"));
+    assert!(result.content.contains("##   [0.9.0]"));
+}
+
+#[test]
+fn integrate_rejects_ambiguous_unreleased_headings() {
+    let existing = "# Changelog\n\n## [Unreleased]\n\n## Unreleased\n";
+    let error = integrate_changelog_checked(Some(existing), "## [1.0.0] - 2026-05-22\n")
+        .expect_err("duplicate release-note sources must fail closed");
+    assert!(error.contains("multiple Unreleased headings"));
+}
+
+#[test]
+fn integrate_rejects_malformed_unreleased_heading() {
+    let existing = "# Changelog\n\n## [Unreleased notes]\n\n- important\n";
+    let error = integrate_changelog_checked(Some(existing), "## [1.0.0] - 2026-05-22\n")
+        .expect_err("a plausible but unsupported heading must not be ignored");
+    assert!(error.contains("unsupported Unreleased heading"));
 }
 
 #[test]
@@ -401,7 +461,7 @@ fn integrate_empty_unreleased_falls_back_to_generated_body() {
     let existing =
         "# Changelog\n\n## [Unreleased]\n\n## [0.1.5] - 2026-05-01\n\n### Added\n\n- prior\n";
     let section = "## [0.1.6] - 2026-05-22\n\n### Fixed\n\n- generated fix\n";
-    let result = integrate_changelog(Some(existing), section);
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
 
     let unreleased_pos = result.content.find("## [Unreleased]").unwrap();
     let release_pos = result.content.find("## [0.1.6]").unwrap();
@@ -420,7 +480,7 @@ fn integrate_empty_unreleased_falls_back_to_generated_body() {
 fn extract_section_returns_promoted_release_for_preview() {
     let existing = "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- hand written fix\n\n## [0.1.5] - 2026-05-01\n\n### Added\n\n- prior\n";
     let section = "## [0.1.6] - 2026-05-22\n\n### Added\n\n- generated\n";
-    let full = integrate_changelog(Some(existing), section);
+    let full = integrate_changelog_checked(Some(existing), section).unwrap();
 
     let preview = extract_section(&full.content, "0.1.6").unwrap();
     assert!(preview.starts_with("## [0.1.6] - 2026-05-22"));
@@ -453,7 +513,7 @@ fn integrate_strips_stale_version_link_refs_on_promotion() {
         [0.1.5]: https://github.com/o/r/releases/tag/v0.1.5\n\
         [contributing]: https://github.com/o/r/blob/main/CONTRIBUTING.md\n";
     let section = "## [0.1.6](https://github.com/o/r/compare/v0.1.5...v0.1.6) - 2026-05-22\n\n### Added\n\n- gen\n";
-    let result = integrate_changelog(Some(existing), section);
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
 
     // Promotion happened as before.
     assert!(result.promoted);
@@ -518,7 +578,7 @@ fn integrate_preserves_numeric_footnote_link_refs() {
         [1]: https://github.com/o/r/issues/1\n\
         [123]: https://example.com/footnote\n";
     let section = "## [0.1.6](https://github.com/o/r/compare/v0.1.5...v0.1.6) - 2026-05-22\n\n### Added\n\n- gen\n";
-    let result = integrate_changelog(Some(existing), section);
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
 
     // Version refs are stripped.
     assert!(
@@ -570,7 +630,7 @@ fn integrate_strips_full_semver_version_link_refs() {
         [Unreleased]: https://github.com/o/r/compare/v1.2.3-alpha.1+build.5...HEAD\n\
         [1.2.3-alpha.1+build.5]: https://github.com/o/r/releases/tag/v1.2.3-alpha.1+build.5\n";
     let section = "## [1.2.4](https://github.com/o/r/compare/v1.2.3...v1.2.4) - 2026-05-22\n\n### Added\n\n- gen\n";
-    let result = integrate_changelog(Some(existing), section);
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
 
     assert!(result.promoted);
     assert!(
@@ -593,7 +653,7 @@ fn integrate_strips_full_semver_version_link_refs() {
 fn integrate_promotion_keeps_single_unreleased_heading() {
     let existing = "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- curated change\n";
     let section = "## [2.0.0] - 2026-05-22\n\n### Changed\n\n- gen\n";
-    let result = integrate_changelog(Some(existing), section);
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
 
     assert_eq!(result.content.matches("## [Unreleased]").count(), 1);
     assert!(result.content.contains("- curated change"));
@@ -601,7 +661,7 @@ fn integrate_promotion_keeps_single_unreleased_heading() {
     assert!(result.promoted, "curated change was promoted");
 }
 
-// --- integrate_changelog: blank-line hygiene across repeated releases ---
+// --- integrate_changelog_checked: blank-line hygiene across repeated releases ---
 
 const PREAMBLE: &str = "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n";
 
@@ -631,7 +691,9 @@ fn release_section(patch: u32) -> String {
 fn repeated_prepends_do_not_accumulate_blank_lines() {
     let mut content = format!("{PREAMBLE}\n{}", release_section(1));
     for patch in 2..=5 {
-        content = integrate_changelog(Some(&content), &release_section(patch)).content;
+        content = integrate_changelog_checked(Some(&content), &release_section(patch))
+            .unwrap()
+            .content;
     }
 
     assert_eq!(
@@ -648,7 +710,9 @@ fn repeated_prepends_do_not_accumulate_blank_lines() {
 fn repeated_promotions_do_not_accumulate_blank_lines() {
     let mut content = format!("{PREAMBLE}\n## [Unreleased]\n\n{}", release_section(1));
     for patch in 2..=5 {
-        content = integrate_changelog(Some(&content), &release_section(patch)).content;
+        content = integrate_changelog_checked(Some(&content), &release_section(patch))
+            .unwrap()
+            .content;
     }
 
     assert_eq!(
@@ -665,7 +729,7 @@ fn promoting_curated_content_leaves_one_blank_line_before_the_prior_release() {
         "{PREAMBLE}\n## [Unreleased]\n\n### Added\n\n- curated\n\n{}",
         release_section(1)
     );
-    let result = integrate_changelog(Some(&existing), &release_section(2));
+    let result = integrate_changelog_checked(Some(&existing), &release_section(2)).unwrap();
 
     assert!(result.promoted);
     assert!(
@@ -678,7 +742,7 @@ fn promoting_curated_content_leaves_one_blank_line_before_the_prior_release() {
 #[test]
 fn promoted_heading_is_separated_from_a_tight_curated_body() {
     let existing = "# Changelog\n\n## [Unreleased]\n### Added\n\n- curated\n";
-    let result = integrate_changelog(Some(existing), &release_section(1));
+    let result = integrate_changelog_checked(Some(existing), &release_section(1)).unwrap();
 
     assert!(
         result.content.contains("- 2026-06-01\n\n### Added"),
@@ -690,7 +754,7 @@ fn promoted_heading_is_separated_from_a_tight_curated_body() {
 #[test]
 fn promotion_keeps_the_indentation_of_a_curated_code_block() {
     let existing = "# Changelog\n\n## [Unreleased]\n\n    let x = 1;\n\n## [0.1.0] - 2026-01-01\n\n### Added\n\n- initial\n";
-    let result = integrate_changelog(Some(existing), &release_section(1));
+    let result = integrate_changelog_checked(Some(existing), &release_section(1)).unwrap();
 
     assert!(
         result.content.contains("\n    let x = 1;\n"),
@@ -702,7 +766,7 @@ fn promotion_keeps_the_indentation_of_a_curated_code_block() {
 #[test]
 fn prepend_puts_the_new_release_above_a_changelog_that_opens_with_a_heading() {
     let existing = "## [0.1.1] - 2026-06-01\n\n### Fixed\n\n- fix 1\n";
-    let result = integrate_changelog(Some(existing), &release_section(2));
+    let result = integrate_changelog_checked(Some(existing), &release_section(2)).unwrap();
 
     let newest = result.content.find("## [0.1.2]").unwrap();
     let oldest = result.content.find("## [0.1.1]").unwrap();

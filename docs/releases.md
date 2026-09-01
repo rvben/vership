@@ -9,7 +9,7 @@ downstream packaging.
 Start from a clean, up-to-date `main` branch and run:
 
 ```sh
-vership preflight
+vership preflight patch # use the same patch/minor/major level as the bump
 vership bump patch # or minor/major
 tarry cmd --timeout 20m -- vership verify
 ```
@@ -20,6 +20,19 @@ the release workflow. Use `vership release` only when the on-disk version was
 intentionally set in advance.
 
 Cargo and Python package versions are kept synchronized as one release unit.
+
+For a deliberate review checkpoint before the release becomes tag-visible,
+prepare the release commit first:
+
+```sh
+vership bump patch --prepare
+git show --stat
+git show -- CHANGELOG.md
+vership release
+```
+
+`--prepare` never creates or pushes a tag. `vership release` converges from the
+reviewed commit and performs the remaining tag and push steps.
 
 ## Failure policy
 

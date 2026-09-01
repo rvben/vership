@@ -99,7 +99,7 @@ fn bump_promotes_curated_unreleased_section() {
     // not claim a changelog was generated from commits.
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert!(
-        stderr.contains("Promoted [Unreleased] section"),
+        stderr.contains("Promoted curated Unreleased notes (1 generated entries replaced)"),
         "expected promotion status message, got stderr:\n{stderr}"
     );
     assert!(
@@ -130,6 +130,262 @@ fn bump_promotes_curated_unreleased_section() {
         props.contains("pluginVersion=0.1.6"),
         "gradle.properties bumped, got:\n{props}"
     );
+}
+
+fn setup_gradle_release(root: &Path, changelog: &str) {
+    init_repo(root);
+    fs::write(
+        root.join("settings.gradle.kts"),
+        "rootProject.name = \"demo\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("gradle.properties"), "pluginVersion=0.1.5\n").unwrap();
+    fs::write(root.join("CHANGELOG.md"), changelog).unwrap();
+    git(
+        root,
+        &[
+            "add",
+            "settings.gradle.kts",
+            "gradle.properties",
+            "CHANGELOG.md",
+        ],
+    );
+    git(root, &["commit", "-m", "chore: initial"]);
+    git(root, &["tag", "-a", "v0.1.5", "-m", "v0.1.5"]);
+    fs::write(root.join("source.txt"), "change").unwrap();
+    git(root, &["add", "source.txt"]);
+    git(root, &["commit", "-m", "fix: release fix"]);
+}
+
+#[test]
+fn changelog_preview_uses_requested_level_and_curated_unbracketed_notes() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(
+        root,
+        "# Changelog\n\n## Unreleased\n\n### Added\n\n- curated feature\n\n## [0.1.5] - 2026-05-01\n",
+    );
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["changelog", "minor"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("## [0.2.0]"), "got:\n{stdout}");
+    assert!(stdout.contains("- curated feature"), "got:\n{stdout}");
+    assert!(!stdout.contains("- release fix"), "got:\n{stdout}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("1 generated entries replaced"));
+    assert!(
+        Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .stdout
+            .is_empty(),
+        "preview must not mutate the repository"
+    );
+}
+
+#[test]
+fn preflight_checks_the_requested_release_tag() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    git(root, &["tag", "-a", "v0.2.0", "-m", "occupied"]);
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["preflight", "minor"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Tag v0.2.0 already exists"));
+}
+
+#[test]
+fn preflight_rejects_untracked_files_by_default() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    fs::write(root.join("forgotten.txt"), "important").unwrap();
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .arg("preflight")
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Untracked files detected"),
+        "got:\n{stderr}"
+    );
+    assert!(stderr.contains("forgotten.txt"), "got:\n{stderr}");
+}
+
+#[test]
+fn preflight_can_explicitly_allow_untracked_files() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    fs::write(
+        root.join("vership.toml"),
+        "[checks]\nallow_untracked = true\n",
+    )
+    .unwrap();
+    git(root, &["add", "vership.toml"]);
+    git(root, &["commit", "-m", "chore: configure release checks"]);
+    fs::write(root.join("scratch.txt"), "intentional").unwrap();
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .arg("preflight")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("untracked path(s) explicitly allowed")
+    );
+}
+
+#[test]
+fn resume_still_rejects_unrelated_untracked_files() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    fs::write(root.join("gradle.properties"), "pluginVersion=0.1.6\n").unwrap();
+    fs::write(root.join("forgotten.txt"), "not part of the release").unwrap();
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["resume", "--skip-checks", "--no-push"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Untracked files detected"),
+        "got:\n{stderr}"
+    );
+    assert!(stderr.contains("forgotten.txt"), "got:\n{stderr}");
+    assert!(!tag_exists(root, "v0.1.6"));
+}
+
+#[test]
+fn failed_custom_checks_preserve_diagnostics() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    fs::write(
+        root.join("vership.toml"),
+        "[checks]\nlint = false\ntest_command = \"printf 'specific failure\\n' >&2; exit 9\"\n",
+    )
+    .unwrap();
+    git(root, &["add", "vership.toml"]);
+    git(root, &["commit", "-m", "chore: configure checks"]);
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .arg("preflight")
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(String::from_utf8_lossy(&output.stderr).contains("specific failure"));
+}
+
+#[test]
+fn prepare_creates_a_reviewable_commit_without_a_tag() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--prepare"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Prepared release commit for v0.1.6"));
+
+    assert!(!tag_exists(root, "v0.1.6"));
+    assert!(
+        Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .stdout
+            .is_empty()
+    );
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["release", "--skip-checks", "--no-push"])
+        .assert()
+        .success();
+    assert!(tag_exists(root, "v0.1.6"));
+}
+
+#[test]
+fn completing_a_prepared_release_does_not_replay_bump_hooks() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(root, "# Changelog\n\n");
+    let marker_dir = TempDir::new().unwrap();
+    let marker = marker_dir.path().join("hook-runs");
+    fs::write(
+        root.join("vership.toml"),
+        format!(
+            "[hooks]\npre-bump = \"printf x >> '{}'\"\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    git(root, &["add", "vership.toml"]);
+    git(root, &["commit", "-m", "chore: configure release hook"]);
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--prepare"])
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "x");
+
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["release", "--skip-checks", "--no-push"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap(),
+        "x",
+        "completing the release must not replay pre-bump hooks"
+    );
+    assert!(tag_exists(root, "v0.1.6"));
 }
 
 /// Drive the real `vership` binary against a CHANGELOG that carries bottom

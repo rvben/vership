@@ -12,6 +12,7 @@ pub struct CheckOptions {
     pub run_tests: bool,
     pub lint_command: Option<String>,
     pub test_command: Option<String>,
+    pub allow_untracked: bool,
     /// When true, skip the "no uncommitted changes" check. Used when resuming
     /// an interrupted release where version files were already bumped.
     pub allow_uncommitted: bool,
@@ -25,6 +26,7 @@ impl Default for CheckOptions {
             run_tests: true,
             lint_command: None,
             test_command: None,
+            allow_untracked: false,
             allow_uncommitted: false,
         }
     }
@@ -40,13 +42,47 @@ pub fn run_preflight(
     // No uncommitted changes (skipped when resuming an interrupted release)
     if options.allow_uncommitted {
         output::print_check_pass("Uncommitted changes allowed (resuming interrupted release)");
-    } else if git::has_uncommitted_changes(root)? {
+    } else if git::has_tracked_changes(root)? {
         output::print_check_fail("Uncommitted changes detected");
         return Err(Error::CheckFailed(
             "commit or stash your changes before releasing".to_string(),
         ));
+    }
+
+    // A resume permits the tracked release files that an interrupted run left
+    // behind, but unrelated untracked files remain subject to the same policy.
+    let untracked = git::untracked_files(root)?;
+    if !untracked.is_empty() && !options.allow_untracked {
+        output::print_check_fail("Untracked files detected");
+        let preview = untracked
+            .iter()
+            .take(5)
+            .map(|path| format!("{path:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let suffix = if untracked.len() > 5 {
+            format!(" (and {} more)", untracked.len() - 5)
+        } else {
+            String::new()
+        };
+        return Err(Error::CheckFailed(format!(
+            "add, ignore, or remove untracked files before releasing: {preview}{suffix}; set checks.allow_untracked = true to permit them"
+        )));
+    }
+    if options.allow_uncommitted {
+        if !untracked.is_empty() {
+            output::print_check_pass(&format!(
+                "{} untracked path(s) explicitly allowed",
+                untracked.len()
+            ));
+        }
+    } else if untracked.is_empty() {
+        output::print_check_pass("Working tree is clean");
     } else {
-        output::print_check_pass("No uncommitted changes");
+        output::print_check_pass(&format!(
+            "No tracked changes ({} untracked path(s) explicitly allowed)",
+            untracked.len()
+        ));
     }
 
     // On expected branch
@@ -89,9 +125,9 @@ pub fn run_preflight(
         };
         match result {
             Ok(()) => output::print_check_pass("Lint passes"),
-            Err(_) => {
+            Err(e) => {
                 output::print_check_fail("Lint failed");
-                return Err(Error::CheckFailed("lint checks failed".to_string()));
+                return Err(e);
             }
         }
     }
@@ -105,9 +141,9 @@ pub fn run_preflight(
         };
         match result {
             Ok(()) => output::print_check_pass("Tests pass"),
-            Err(_) => {
+            Err(e) => {
                 output::print_check_fail("Tests failed");
-                return Err(Error::CheckFailed("tests failed".to_string()));
+                return Err(e);
             }
         }
     }
@@ -116,11 +152,12 @@ pub fn run_preflight(
 }
 
 fn run_shell_command(root: &Path, cmd: &str) -> Result<()> {
+    // Inherit stdout/stderr so a failed check leaves the actionable compiler,
+    // test, or linter diagnostic visible. This streams output without buffering
+    // an arbitrarily large test log in memory.
     let status = Command::new("sh")
         .args(["-c", cmd])
         .current_dir(root)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
         .status()
         .map_err(|e| Error::Other(format!("run command '{cmd}': {e}")))?;
     if status.success() {

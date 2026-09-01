@@ -104,8 +104,6 @@ impl ProjectType for NodeProject {
         let status = std::process::Command::new(program)
             .args(args)
             .current_dir(root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| Error::Other(format!("run {program}: {e}")))?;
 
@@ -134,8 +132,6 @@ impl ProjectType for NodeProject {
         let status = std::process::Command::new(program)
             .args(args)
             .current_dir(root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| Error::Other(format!("run {program} lint: {e}")))?;
 
@@ -162,8 +158,6 @@ impl ProjectType for NodeProject {
         let status = std::process::Command::new(program)
             .args(args)
             .current_dir(root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| Error::Other(format!("run {program} test: {e}")))?;
 

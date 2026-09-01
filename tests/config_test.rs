@@ -24,6 +24,7 @@ post-push = "echo done"
 [checks]
 lint = false
 tests = false
+allow_untracked = true
 "#;
     let config = Config::parse(toml).unwrap();
     assert_eq!(config.project.project_type.as_deref(), Some("rust-maturin"));
@@ -33,6 +34,7 @@ tests = false
     assert_eq!(config.hooks.post_push.as_deref(), Some("echo done"));
     assert!(!config.checks.lint);
     assert!(!config.checks.tests);
+    assert!(config.checks.allow_untracked);
 }
 
 #[test]
@@ -45,12 +47,24 @@ pre-bump = "make check"
     assert_eq!(config.project.branch, "main");
     assert!(config.checks.lint);
     assert!(config.checks.tests);
+    assert!(!config.checks.allow_untracked);
 }
 
 #[test]
 fn load_missing_file_returns_default() {
-    let config = Config::load(std::path::Path::new("/nonexistent/vership.toml"));
+    let config = Config::load_checked(std::path::Path::new("/nonexistent/vership.toml")).unwrap();
     assert_eq!(config.project.branch, "main");
+}
+
+#[test]
+fn load_malformed_file_returns_an_error_instead_of_defaults() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("vership.toml");
+    std::fs::write(&path, "[checks\ntests = false\n").unwrap();
+
+    let error =
+        Config::load_checked(&path).expect_err("invalid release configuration must fail closed");
+    assert!(error.to_string().contains("parse vership.toml"));
 }
 
 #[test]

@@ -15,17 +15,22 @@ pub struct ConventionalCommit {
 
 /// Parse a conventional commit message. Returns None for non-conventional or merge commits.
 pub fn parse_conventional_commit(message: &str) -> Option<ConventionalCommit> {
-    if message.starts_with("Merge ") {
+    let subject = message.lines().next()?;
+    if subject.starts_with("Merge ") {
         return None;
     }
 
     let re = Regex::new(r"^(\w+)(?:\(([^)]+)\))?(!)?: (.+)$").expect("valid regex");
-    let caps = re.captures(message)?;
+    let caps = re.captures(subject)?;
+    let has_breaking_footer = message.lines().skip(1).any(|line| {
+        let line = line.trim_start();
+        line.starts_with("BREAKING CHANGE:") || line.starts_with("BREAKING-CHANGE:")
+    });
 
     Some(ConventionalCommit {
         commit_type: caps[1].to_string(),
         scope: caps.get(2).map(|m| m.as_str().to_string()),
-        breaking: caps.get(3).is_some(),
+        breaking: caps.get(3).is_some() || has_breaking_footer,
         description: caps[4].to_string(),
     })
 }
@@ -67,7 +72,11 @@ pub fn generate_changelog(
             breaking.push(entry.clone());
         }
 
-        if let Some(section) = type_to_section(&cc.commit_type) {
+        // A breaking entry belongs in one place. Repeating it in its ordinary
+        // type section makes generated release notes noisy and ambiguous.
+        if !cc.breaking
+            && let Some(section) = type_to_section(&cc.commit_type)
+        {
             sections.entry(section).or_default().push(entry);
         }
     }
@@ -163,7 +172,7 @@ pub fn generate_changelog_with_mode(
                 return Err(format!(
                     "non-conventional commit found (strict mode): {} {}",
                     &commit.hash[..7.min(commit.hash.len())],
-                    commit.message
+                    commit.subject()
                 ));
             }
         }
@@ -185,9 +194,10 @@ pub fn generate_changelog_with_mode(
                 match remote_url {
                     Some(url) => output.push_str(&format!(
                         "- {} ([{short_hash}]({url}/commit/{}))\n",
-                        commit.message, commit.hash
+                        commit.subject(),
+                        commit.hash
                     )),
-                    None => output.push_str(&format!("- {}\n", commit.message)),
+                    None => output.push_str(&format!("- {}\n", commit.subject())),
                 }
             }
         }
@@ -255,6 +265,7 @@ fn trim_blank_lines(block: &str) -> &str {
 }
 
 /// Outcome of merging a generated release section into a CHANGELOG.md.
+#[derive(Debug)]
 pub struct ChangelogUpdate {
     /// The full updated changelog document.
     pub content: String,
@@ -263,12 +274,15 @@ pub struct ChangelogUpdate {
     /// `[Unreleased]` section was empty (the generated body was used) or
     /// absent (legacy prepend).
     pub promoted: bool,
+    /// Number of generated commit entries omitted because curated notes are
+    /// authoritative. Callers surface this so replacement is never silent.
+    pub replaced_generated_entries: usize,
 }
 
 /// Merge a generated release section into an existing CHANGELOG.md.
 ///
-/// When the file follows the "Keep a Changelog" convention with a
-/// `## [Unreleased]` section, that section is *promoted* into the release:
+/// When the file has a canonical `## [Unreleased]` heading or the common
+/// unbracketed `## Unreleased` form, that section is *promoted* into the release:
 /// its heading becomes the new version's heading, a fresh empty
 /// `## [Unreleased]` is inserted at the top, and any hand-curated entries are
 /// preserved. The generated section is only used to supply the version heading
@@ -276,21 +290,42 @@ pub struct ChangelogUpdate {
 ///
 /// When there is no `## [Unreleased]` section, the generated section is simply
 /// prepended above the most recent release (legacy behaviour).
-pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> ChangelogUpdate {
+pub fn integrate_changelog_checked(
+    existing: Option<&str>,
+    new_section: &str,
+) -> std::result::Result<ChangelogUpdate, String> {
     let Some(content) = existing else {
-        return ChangelogUpdate {
+        return Ok(ChangelogUpdate {
             content: prepend_to_changelog(None, new_section),
             promoted: false,
-        };
+            replaced_generated_entries: 0,
+        });
     };
 
-    // Locate the `## [Unreleased]` heading line, if any.
-    let unreleased_re = Regex::new(r"(?m)^## \[Unreleased\][^\n]*$").expect("valid regex");
-    let Some(m) = unreleased_re.find(content) else {
-        return ChangelogUpdate {
+    // Accept both canonical Keep a Changelog headings and the widespread
+    // unbracketed form. Reject near-matches and duplicates instead of silently
+    // publishing a release that strands hand-written notes.
+    let unreleased_re =
+        Regex::new(r"(?im)^##[ \t]+(?:\[unreleased\](?:\([^)]+\))?|unreleased)[ \t]*\r?$")
+            .expect("valid regex");
+    let matches: Vec<_> = unreleased_re.find_iter(content).collect();
+    if matches.len() > 1 {
+        return Err("multiple Unreleased headings found; keep exactly one before releasing".into());
+    }
+    let Some(m) = matches.first().copied() else {
+        let near_match = Regex::new(r"(?im)^##[^\n]*unreleased[^\n]*$")
+            .expect("valid regex")
+            .is_match(content);
+        if near_match {
+            return Err(
+                "unsupported Unreleased heading; use `## [Unreleased]` or `## Unreleased`".into(),
+            );
+        }
+        return Ok(ChangelogUpdate {
             content: prepend_to_changelog(Some(content), new_section),
             promoted: false,
-        };
+            replaced_generated_entries: 0,
+        });
     };
 
     let preamble = &content[..m.start()];
@@ -298,7 +333,7 @@ pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> Changel
     let after_heading = &content[m.end()..];
 
     // The [Unreleased] body runs until the next `## ` heading (or end of file).
-    let next_heading = Regex::new(r"(?m)^## ").expect("valid regex");
+    let next_heading = Regex::new(r"(?m)^##[ \t]+").expect("valid regex");
     let (unreleased_body, rest) = match next_heading.find(after_heading) {
         Some(h) => (&after_heading[..h.start()], &after_heading[h.start()..]),
         None => (after_heading, ""),
@@ -308,6 +343,14 @@ pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> Changel
     let new_header = new_section.lines().next().unwrap_or(new_section);
 
     let curated = !unreleased_body.trim().is_empty();
+    let replaced_generated_entries = if curated {
+        new_section
+            .lines()
+            .filter(|line| line.trim_start().starts_with("- "))
+            .count()
+    } else {
+        0
+    };
     let promoted_section = if curated {
         // Curated content wins; reuse only the generated heading.
         join_blocks(&[new_header, unreleased_body])
@@ -322,10 +365,23 @@ pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> Changel
     // drift out of date on every promotion. Strip them, leaving a clean trailing
     // newline. Non-version link-reference definitions are preserved.
     let result = strip_version_link_refs(&result);
-    ChangelogUpdate {
+    Ok(ChangelogUpdate {
         content: result,
         promoted: curated,
-    }
+        replaced_generated_entries,
+    })
+}
+
+/// Compatibility wrapper for callers that only handle well-formed changelogs.
+/// Release paths use [`integrate_changelog_checked`] so ambiguity is returned
+/// as an actionable error rather than silently ignored.
+#[deprecated(
+    since = "0.5.21",
+    note = "use integrate_changelog_checked to handle malformed headings"
+)]
+pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> ChangelogUpdate {
+    integrate_changelog_checked(existing, new_section)
+        .expect("ambiguous or malformed Unreleased heading")
 }
 
 /// Remove changelog version link-reference definitions: the bottom
@@ -355,7 +411,7 @@ pub fn extract_section<'a>(content: &'a str, version: &str) -> Option<&'a str> {
     let start = content.find(&heading)?;
     let rest = &content[start..];
     let body_start = rest.find('\n').map(|i| i + 1).unwrap_or(rest.len());
-    let next = Regex::new(r"(?m)^## ")
+    let next = Regex::new(r"(?m)^##[ \t]+")
         .expect("valid regex")
         .find(&rest[body_start..])
         .map(|m| body_start + m.start())

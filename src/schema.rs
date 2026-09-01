@@ -65,6 +65,13 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                         "type": "boolean",
                         "default": false,
                         "description": "Stop after tagging, do not push"
+                    },
+                    {
+                        "name": "--prepare",
+                        "type": "boolean",
+                        "default": false,
+                        "conflicts_with": ["--no-push"],
+                        "description": "Create the release commit, but do not tag or push"
                     }
                 ],
                 "output_fields": [
@@ -99,6 +106,13 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                         "type": "boolean",
                         "default": false,
                         "description": "Stop after tagging, do not push"
+                    },
+                    {
+                        "name": "--prepare",
+                        "type": "boolean",
+                        "default": false,
+                        "conflicts_with": ["--no-push"],
+                        "description": "Create the release commit, but do not tag or push"
                     }
                 ],
                 "output_fields": [
@@ -133,6 +147,13 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                         "type": "boolean",
                         "default": false,
                         "description": "Stop after tagging, do not push"
+                    },
+                    {
+                        "name": "--prepare",
+                        "type": "boolean",
+                        "default": false,
+                        "conflicts_with": ["--no-push"],
+                        "description": "Create the release commit, but do not tag or push"
                     }
                 ],
                 "output_fields": [
@@ -149,7 +170,14 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                 "effects": "read_only",
                 "mutating": false,
                 "cardinality": "single",
-                "args": [],
+                "args": [{
+                    "name": "level",
+                    "type": "string",
+                    "required": false,
+                    "default": "patch",
+                    "enum": ["patch", "minor", "major"],
+                    "description": "Version bump level to preview"
+                }],
                 "stdout_schema": {}
             },
             {
@@ -158,7 +186,14 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                 "effects": "read_only",
                 "mutating": false,
                 "cardinality": "single",
-                "args": [],
+                "args": [{
+                    "name": "level",
+                    "type": "string",
+                    "required": false,
+                    "default": "patch",
+                    "enum": ["patch", "minor", "major"],
+                    "description": "Version bump level whose tag should be checked"
+                }],
                 "stdout_schema": {}
             },
             {

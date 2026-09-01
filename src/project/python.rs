@@ -76,8 +76,6 @@ impl ProjectType for PythonProject {
             let status = std::process::Command::new("uv")
                 .args(["lock"])
                 .current_dir(root)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
                 .status()
                 .map_err(|e| Error::Other(format!("run uv lock: {e}")))?;
             if !status.success() {
@@ -89,8 +87,6 @@ impl ProjectType for PythonProject {
             let status = std::process::Command::new("poetry")
                 .args(["lock", "--no-update"])
                 .current_dir(root)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
                 .status()
                 .map_err(|e| Error::Other(format!("run poetry lock: {e}")))?;
             if !status.success() {

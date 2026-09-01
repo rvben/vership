@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- **release**: add `--prepare` to create a reviewable release commit without tagging or pushing
+- **release**: let `changelog` and `preflight` target patch, minor, or major releases
+- **checks**: add an explicit `checks.allow_untracked` escape hatch for release worktrees
+
+### Fixed
+
+- **changelog**: promote bracketed and unbracketed Unreleased headings and fail closed on ambiguous headings
+- **changelog**: make previews use the exact release rendering path and disclose replaced generated entries
+- **changelog**: recognize `BREAKING CHANGE` footers and avoid duplicating breaking entries
+- **checks**: preserve diagnostics from failed lint, test, and lockfile commands
+- **config**: reject malformed configuration instead of silently using defaults
+- **release**: reject untracked files by default and report the actual branch in push instructions
+
 ## [0.5.20](https://github.com/rvben/vership/compare/v0.5.19...v0.5.20) - 2026-08-25
 
 ### Fixed

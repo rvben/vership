@@ -6,7 +6,14 @@ use crate::error::{Error, Result};
 #[derive(Debug, Clone)]
 pub struct Commit {
     pub hash: String,
+    /// The complete commit message. Call [`Commit::subject`] for the first line.
     pub message: String,
+}
+
+impl Commit {
+    pub fn subject(&self) -> &str {
+        self.message.lines().next().unwrap_or("")
+    }
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Result<String> {
@@ -79,13 +86,38 @@ pub fn tag_exists(root: &Path, tag: &str) -> Result<bool> {
     )
 }
 
-/// Return true if the working tree has staged or unstaged changes, including untracked files.
-pub fn has_uncommitted_changes(root: &Path) -> Result<bool> {
-    // Check staged and unstaged changes to tracked files only.
-    // Untracked files should not block a release.
+/// Return true if tracked files have staged or unstaged changes.
+pub fn has_tracked_changes(root: &Path) -> Result<bool> {
     let has_staged = !git_success(root, &["diff", "--cached", "--quiet"])?;
     let has_unstaged = !git_success(root, &["diff", "--quiet"])?;
     Ok(has_staged || has_unstaged)
+}
+
+/// Return untracked, non-ignored paths relative to the repository root.
+pub fn untracked_files(root: &Path) -> Result<Vec<String>> {
+    let output = Command::new("git")
+        .args(["ls-files", "-z", "--others", "--exclude-standard"])
+        .current_dir(root)
+        .output()
+        .map_err(|e| Error::Git(format!("failed to run git: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(Error::Git(format!("git ls-files failed: {stderr}")));
+    }
+    if output.stdout.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .collect())
+}
+
+/// Return true if the working tree has staged, unstaged, or untracked changes.
+pub fn has_uncommitted_changes(root: &Path) -> Result<bool> {
+    Ok(has_tracked_changes(root)? || !untracked_files(root)?.is_empty())
 }
 
 /// Return the name of the currently checked-out branch.
@@ -105,19 +137,35 @@ pub fn commits_since_tag(root: &Path, tag: Option<&str>) -> Result<Vec<Commit>> 
         None => "HEAD".to_string(),
     };
 
-    let output = git_output(root, &["log", &range, "--format=%H %s"])?;
-    if output.is_empty() {
+    // NUL delimiters preserve multiline bodies without making record parsing
+    // depend on user-authored text. Full messages are required to recognize
+    // Conventional Commit `BREAKING CHANGE:` footers.
+    let output = Command::new("git")
+        .args(["log", &range, "-z", "--format=%H%x00%B"])
+        .current_dir(root)
+        .output()
+        .map_err(|e| Error::Git(format!("failed to run git: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(Error::Git(format!("git log failed: {stderr}")));
+    }
+    if output.stdout.is_empty() {
         return Ok(vec![]);
     }
 
-    let commits = output
-        .lines()
-        .map(|line| {
-            let (hash, message) = line.split_once(' ').unwrap_or((line, ""));
-            Commit {
-                hash: hash.to_string(),
-                message: message.to_string(),
+    let fields: Vec<&[u8]> = output.stdout.split(|byte| *byte == 0).collect();
+    let (pairs, _) = fields.as_chunks::<2>();
+    let commits = pairs
+        .iter()
+        .filter_map(|pair| {
+            let hash = String::from_utf8_lossy(pair[0]).trim().to_string();
+            if hash.is_empty() {
+                return None;
             }
+            Some(Commit {
+                hash,
+                message: String::from_utf8_lossy(pair[1]).trim_end().to_string(),
+            })
         })
         .collect();
 

@@ -67,7 +67,7 @@ pub fn run(
     output: &OutputConfig,
 ) -> Result<()> {
     let root = Path::new(".");
-    let config = Config::load(Path::new("vership.toml"));
+    let config = Config::load_checked(Path::new("vership.toml"))?;
     let version = crate::verify::resolve_version(root, &config, version)?;
     let selected = select_managers(only, skip)?;
 

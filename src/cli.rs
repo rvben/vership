@@ -51,6 +51,9 @@ pub enum Command {
         /// Stop after tagging, do not push
         #[arg(long)]
         no_push: bool,
+        /// Create the release commit, but do not tag or push
+        #[arg(long, conflicts_with = "no_push")]
+        prepare: bool,
     },
     /// Tag and release the on-disk version as-is, without bumping.
     /// Use for initial releases or when the version was set manually.
@@ -64,6 +67,9 @@ pub enum Command {
         /// Stop after tagging, do not push
         #[arg(long)]
         no_push: bool,
+        /// Create the release commit, but do not tag or push
+        #[arg(long, conflicts_with = "no_push")]
+        prepare: bool,
     },
     /// Resume an interrupted bump. Trusts the on-disk version as the target
     /// and finishes the commit/tag/push flow.
@@ -77,11 +83,22 @@ pub enum Command {
         /// Stop after tagging, do not push
         #[arg(long)]
         no_push: bool,
+        /// Create the release commit, but do not tag or push
+        #[arg(long, conflicts_with = "no_push")]
+        prepare: bool,
     },
-    /// Preview changelog for unreleased commits
-    Changelog,
-    /// Run all pre-flight checks without releasing
-    Preflight,
+    /// Preview the exact changelog section for a release
+    Changelog {
+        /// Version bump level to preview
+        #[arg(value_enum, default_value = "patch")]
+        level: BumpLevel,
+    },
+    /// Run all pre-flight checks for a release target
+    Preflight {
+        /// Version bump level whose tag should be checked
+        #[arg(value_enum, default_value = "patch")]
+        level: BumpLevel,
+    },
     /// Show current version, unreleased commits, and project type
     Status {
         /// Maximum number of unreleased commits to show (0 = no limit)
@@ -143,7 +160,7 @@ pub enum ConfigCommand {
     Show,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum BumpLevel {
     Patch,
     Minor,

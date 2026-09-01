@@ -119,24 +119,27 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             dry_run,
             &output,
         ),
-        Command::Preflight => vership::release::preflight(),
-        Command::Changelog => vership::release::changelog_preview(),
+        Command::Preflight { level } => vership::release::preflight_for(level),
+        Command::Changelog { level } => vership::release::changelog_preview_for(level),
         Command::Bump {
             level,
             dry_run,
             skip_checks,
             no_push,
-        } => vership::release::bump(level, dry_run, skip_checks, no_push),
+            prepare,
+        } => vership::release::bump_with_prepare(level, dry_run, skip_checks, no_push, prepare),
         Command::Release {
             dry_run,
             skip_checks,
             no_push,
-        } => vership::release::release_current(dry_run, skip_checks, no_push),
+            prepare,
+        } => vership::release::release_current_with_prepare(dry_run, skip_checks, no_push, prepare),
         Command::Resume {
             dry_run,
             skip_checks,
             no_push,
-        } => vership::release::resume(dry_run, skip_checks, no_push),
+            prepare,
+        } => vership::release::resume_with_prepare(dry_run, skip_checks, no_push, prepare),
     }
 }
 
@@ -154,11 +157,13 @@ mod tests {
                 dry_run,
                 skip_checks,
                 no_push,
+                prepare,
             } => {
                 assert!(matches!(level, BumpLevel::Patch));
                 assert!(!dry_run);
                 assert!(!skip_checks);
                 assert!(!no_push);
+                assert!(!prepare);
             }
             _ => panic!("expected Bump"),
         }
@@ -186,6 +191,18 @@ mod tests {
     }
 
     #[test]
+    fn cli_bump_prepare_stops_before_tagging() {
+        let cli = Cli::try_parse_from(["vership", "bump", "minor", "--prepare"]).unwrap();
+        match cli.command {
+            Command::Bump { prepare, .. } => assert!(prepare),
+            _ => panic!("expected Bump"),
+        }
+        assert!(
+            Cli::try_parse_from(["vership", "bump", "minor", "--prepare", "--no-push"]).is_err()
+        );
+    }
+
+    #[test]
     fn cli_release() {
         let cli = Cli::try_parse_from(["vership", "release"]).unwrap();
         match cli.command {
@@ -193,10 +210,12 @@ mod tests {
                 dry_run,
                 skip_checks,
                 no_push,
+                prepare,
             } => {
                 assert!(!dry_run);
                 assert!(!skip_checks);
                 assert!(!no_push);
+                assert!(!prepare);
             }
             _ => panic!("expected Release"),
         }
@@ -344,13 +363,45 @@ mod tests {
     #[test]
     fn cli_preflight() {
         let cli = Cli::try_parse_from(["vership", "preflight"]).unwrap();
-        assert!(matches!(cli.command, Command::Preflight));
+        assert!(matches!(
+            cli.command,
+            Command::Preflight {
+                level: BumpLevel::Patch
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_preflight_accepts_release_level() {
+        let cli = Cli::try_parse_from(["vership", "preflight", "major"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Preflight {
+                level: BumpLevel::Major
+            }
+        ));
     }
 
     #[test]
     fn cli_changelog() {
         let cli = Cli::try_parse_from(["vership", "changelog"]).unwrap();
-        assert!(matches!(cli.command, Command::Changelog));
+        assert!(matches!(
+            cli.command,
+            Command::Changelog {
+                level: BumpLevel::Patch
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_changelog_accepts_release_level() {
+        let cli = Cli::try_parse_from(["vership", "changelog", "minor"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Changelog {
+                level: BumpLevel::Minor
+            }
+        ));
     }
 
     #[test]

@@ -10,7 +10,7 @@ A release orchestrator that handles version bumping, changelog generation, and p
 
 ```
 $ vership bump patch
-✓ No uncommitted changes
+✓ Working tree is clean
 ✓ On branch main
 ✓ Tag v0.4.1 does not exist
 ✓ Lock file in sync
@@ -93,12 +93,13 @@ vership bump <patch|minor|major>   Bump version, generate changelog, tag, push
   --dry-run                        Preview without making changes
   --skip-checks                    Skip lint and test checks
   --no-push                        Stop after tagging, do not push
+  --prepare                        Commit changes, but do not tag or push
 vership release                    Tag the on-disk version as-is (no bump)
-  --dry-run / --skip-checks / --no-push    same as bump
+  --dry-run / --skip-checks / --no-push / --prepare    same as bump
 vership resume                     Finish an interrupted bump (trusts on-disk version)
-  --dry-run / --skip-checks / --no-push    same as bump
-vership changelog                  Preview changelog for unreleased commits
-vership preflight                  Run all pre-flight checks
+  --dry-run / --skip-checks / --no-push / --prepare    same as bump
+vership changelog [patch|minor|major]  Preview the exact release section
+vership preflight [patch|minor|major]  Check the intended release target
 vership status                     Show version, project type, unreleased commits
 vership verify [<version>]         Verify a release is live on all publish targets
   --targets <list> / --skip <list>         Filter targets
@@ -120,7 +121,7 @@ doesn't fire.
 `vership bump patch` runs this flow:
 
 1. **Detect** project type (Rust, Rust+Maturin, Node, Go, Python, Gradle, Ansible Collection)
-2. **Check** clean working tree, correct branch, tag doesn't exist, lockfile in sync
+2. **Check** clean working tree (including untracked files), correct branch, intended tag doesn't exist, lockfile in sync
 3. **Check** lint and tests pass (skippable with `--skip-checks`)
 4. **Bump** version in project files (Cargo.toml, package.json, pyproject.toml, gradle.properties, galaxy.yml) or tag directly (Go)
 5. **Update** version references in extra files (`version_files`)
@@ -213,6 +214,19 @@ Generated from [conventional commits](https://www.conventionalcommits.org/) in [
 | `feat!` / `BREAKING CHANGE` | Breaking Changes |
 | `chore`, `docs`, `ci`, `test`, `refactor`, `build`, `style` | Excluded |
 
+### Curated Unreleased notes
+
+Vership promotes hand-written notes under either `## [Unreleased]` (the
+canonical Keep a Changelog form) or `## Unreleased`. A fresh canonical
+`## [Unreleased]` heading is left behind for the next release. Duplicate or
+malformed Unreleased headings stop the release rather than risking incomplete
+notes.
+
+When the Unreleased section contains curated content, that content is
+authoritative and replaces the generated commit entries. Vership reports the
+number of replaced entries, and both `vership changelog <level>` and
+`vership bump <level> --dry-run` show the exact section that would be released.
+
 ## Version Files
 
 Projects often have version strings scattered across READMEs, docs, and companion packages. vership updates them all during the bump:
@@ -272,6 +286,7 @@ post-push = "echo done"      # Run after push (e.g. trigger Homebrew update)
 [checks]
 lint = true                  # Run lint checks (default: true)
 tests = true                 # Run tests (default: true)
+allow_untracked = false      # Require untracked files to be added or ignored
 lint_command = "npm run lint" # Override default lint command
 test_command = "npm test"     # Override default test command
 

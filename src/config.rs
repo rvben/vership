@@ -72,6 +72,8 @@ pub struct ArtifactEntry {
 pub struct ChecksConfig {
     pub lint: bool,
     pub tests: bool,
+    /// Permit untracked, non-ignored files during release preflight.
+    pub allow_untracked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lint_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,6 +120,7 @@ impl Default for ChecksConfig {
         Self {
             lint: true,
             tests: true,
+            allow_untracked: false,
             lint_command: None,
             test_command: None,
         }
@@ -132,17 +135,32 @@ impl Config {
         toml::from_str(content).map_err(|e| Error::Config(format!("parse vership.toml: {e}")))
     }
 
-    pub fn load(path: &Path) -> Self {
+    /// Load configuration and report malformed or unreadable files.
+    pub fn load_checked(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(content) => Self::parse(&content).unwrap_or_default(),
-            Err(_) => Self::default(),
+            Ok(content) => Self::parse(&content),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => Err(Error::Io(error)),
         }
+    }
+
+    /// Compatibility wrapper for library users. CLI paths use `load_checked`
+    /// and fail closed; new callers should do the same.
+    #[deprecated(
+        since = "0.5.21",
+        note = "use Config::load_checked to handle invalid files"
+    )]
+    pub fn load(path: &Path) -> Self {
+        Self::load_checked(path).unwrap_or_else(|error| {
+            eprintln!("Warning: {error}; using default configuration");
+            Self::default()
+        })
     }
 }
 
 pub fn show(output: &crate::output::OutputConfig) -> Result<()> {
     let path = Path::new("vership.toml");
-    let config = Config::load(path);
+    let config = Config::load_checked(path)?;
     if output.is_json() {
         println!(
             "{}",
@@ -182,6 +200,7 @@ pub fn init() -> Result<()> {
 # [checks]
 # lint = true
 # tests = true
+# allow_untracked = false          # Opt out of strict clean-tree checks
 # lint_command = "npm run lint"    # Override default lint command
 # test_command = "npm test"       # Override default test command
 

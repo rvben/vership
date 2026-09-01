@@ -26,7 +26,7 @@ pub fn status(
     fields: Option<&str>,
 ) -> Result<()> {
     let root = project_root()?;
-    let config = Config::load(&root.join("vership.toml"));
+    let config = Config::load_checked(&root.join("vership.toml"))?;
     let project = project::detect(&root, config.project.project_type.as_deref())?;
     let current_version = project.read_version(&root)?;
     let package_name = project.package_name(&root)?;
@@ -64,7 +64,7 @@ pub fn status(
             .map(|c| {
                 serde_json::json!({
                     "hash": &c.hash[..7.min(c.hash.len())],
-                    "message": c.message,
+                    "message": c.subject(),
                 })
             })
             .collect();
@@ -111,7 +111,7 @@ pub fn status(
             println!();
             for c in shown_commits {
                 let short_hash = &c.hash[..7.min(c.hash.len())];
-                println!("  {short_hash} {}", c.message);
+                println!("  {short_hash} {}", c.subject());
             }
             if limit > 0 && after_offset.len() > limit {
                 println!("  ... ({} more)", after_offset.len() - limit);
@@ -122,12 +122,18 @@ pub fn status(
     Ok(())
 }
 
+/// Run preflight for the default patch target.
 pub fn preflight() -> Result<()> {
+    preflight_for(BumpLevel::Patch)
+}
+
+/// Run preflight for the requested release target.
+pub fn preflight_for(level: BumpLevel) -> Result<()> {
     let root = project_root()?;
-    let config = Config::load(&root.join("vership.toml"));
+    let config = Config::load_checked(&root.join("vership.toml"))?;
     let project = project::detect(&root, config.project.project_type.as_deref())?;
     let current_version = project.read_version(&root)?;
-    let new_version = version::bump(current_version, BumpLevel::Patch);
+    let new_version = version::bump(current_version, level);
     let tag = format!("v{new_version}");
 
     let options = CheckOptions {
@@ -136,6 +142,7 @@ pub fn preflight() -> Result<()> {
         run_tests: config.checks.tests,
         lint_command: config.checks.lint_command.clone(),
         test_command: config.checks.test_command.clone(),
+        allow_untracked: config.checks.allow_untracked,
         allow_uncommitted: false,
     };
 
@@ -144,22 +151,42 @@ pub fn preflight() -> Result<()> {
     Ok(())
 }
 
+/// Preview the default patch release section.
 pub fn changelog_preview() -> Result<()> {
+    changelog_preview_for(BumpLevel::Patch)
+}
+
+/// Preview the exact release section for the requested level.
+pub fn changelog_preview_for(level: BumpLevel) -> Result<()> {
     let root = project_root()?;
-    let config = Config::load(&root.join("vership.toml"));
+    let config = Config::load_checked(&root.join("vership.toml"))?;
     let project = project::detect(&root, config.project.project_type.as_deref())?;
     let current_version = project.read_version(&root)?;
     let latest_tag = git::latest_semver_tag(&root)?;
     let commits = git::commits_since_tag(&root, latest_tag.as_deref())?;
     let remote_url = git::remote_url(&root)?;
 
-    let next_version = version::bump(current_version, BumpLevel::Patch);
-    let changelog_section = changelog::generate_changelog(
+    let next_version = version::bump(current_version, level);
+    let generated = changelog::generate_changelog_with_mode(
         &commits,
         &next_version.to_string(),
         latest_tag.as_deref(),
         remote_url.as_deref(),
-    );
+        &config.changelog.unconventional,
+    )
+    .map_err(Error::CheckFailed)?;
+
+    let existing = std::fs::read_to_string(root.join("CHANGELOG.md")).ok();
+    let update = changelog::integrate_changelog_checked(existing.as_deref(), &generated)
+        .map_err(Error::CheckFailed)?;
+    if update.promoted {
+        output::print_step(&format!(
+            "Previewing curated Unreleased notes ({} generated entries replaced)",
+            update.replaced_generated_entries
+        ));
+    }
+    let changelog_section = changelog::extract_section(&update.content, &next_version.to_string())
+        .unwrap_or(&generated);
 
     println!("{changelog_section}");
     Ok(())
@@ -178,13 +205,25 @@ pub struct ExecOpts {
 /// expected post-bump version and the working tree is dirty, finishes that
 /// run instead of double-bumping.
 pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
+    bump_with_prepare(level, dry_run, skip_checks, no_push, false)
+}
+
+pub fn bump_with_prepare(
+    level: BumpLevel,
+    dry_run: bool,
+    skip_checks: bool,
+    no_push: bool,
+    prepare: bool,
+) -> Result<()> {
     let root = project_root()?;
-    let config = Config::load(&root.join("vership.toml"));
+    let config = Config::load_checked(&root.join("vership.toml"))?;
     let project = project::detect(&root, config.project.project_type.as_deref())?;
 
     let on_disk = project.read_version(&root)?;
     let latest_tag = git::latest_semver_tag(&root)?;
-    let has_uncommitted = git::has_uncommitted_changes(&root)?;
+    // Resume detection is based on tracked release files only. An unrelated
+    // untracked path must never turn a fresh bump into an interrupted release.
+    let has_uncommitted = git::has_tracked_changes(&root)?;
 
     let plan = ReleasePlan::bump(on_disk, latest_tag.as_deref(), level, has_uncommitted);
     execute(
@@ -194,6 +233,7 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
             skip_checks,
             no_push,
         },
+        prepare,
     )
 }
 
@@ -202,8 +242,17 @@ pub fn bump(level: BumpLevel, dry_run: bool, skip_checks: bool, no_push: bool) -
 /// Used for initial releases (when the manifest is already at the intended
 /// starting version) or when the version was set manually.
 pub fn release_current(dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
+    release_current_with_prepare(dry_run, skip_checks, no_push, false)
+}
+
+pub fn release_current_with_prepare(
+    dry_run: bool,
+    skip_checks: bool,
+    no_push: bool,
+    prepare: bool,
+) -> Result<()> {
     let root = project_root()?;
-    let config = Config::load(&root.join("vership.toml"));
+    let config = Config::load_checked(&root.join("vership.toml"))?;
     let project = project::detect(&root, config.project.project_type.as_deref())?;
 
     let on_disk = project.read_version(&root)?;
@@ -217,6 +266,7 @@ pub fn release_current(dry_run: bool, skip_checks: bool, no_push: bool) -> Resul
             skip_checks,
             no_push,
         },
+        prepare,
     )
 }
 
@@ -225,8 +275,17 @@ pub fn release_current(dry_run: bool, skip_checks: bool, no_push: bool) -> Resul
 /// Trusts the on-disk version as the intended target, then completes the
 /// commit/tag/push flow.
 pub fn resume(dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
+    resume_with_prepare(dry_run, skip_checks, no_push, false)
+}
+
+pub fn resume_with_prepare(
+    dry_run: bool,
+    skip_checks: bool,
+    no_push: bool,
+    prepare: bool,
+) -> Result<()> {
     let root = project_root()?;
-    let config = Config::load(&root.join("vership.toml"));
+    let config = Config::load_checked(&root.join("vership.toml"))?;
     let project = project::detect(&root, config.project.project_type.as_deref())?;
 
     let on_disk = project.read_version(&root)?;
@@ -240,14 +299,15 @@ pub fn resume(dry_run: bool, skip_checks: bool, no_push: bool) -> Result<()> {
             skip_checks,
             no_push,
         },
+        prepare,
     )
 }
 
 /// Single linear orchestrator. Runs preflight, optionally writes the version,
 /// generates changelog, commits, tags, and pushes.
-fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
+fn execute(plan: ReleasePlan, opts: ExecOpts, prepare: bool) -> Result<()> {
     let root = project_root()?;
-    let config = Config::load(&root.join("vership.toml"));
+    let config = Config::load_checked(&root.join("vership.toml"))?;
     let project = project::detect(&root, config.project.project_type.as_deref())?;
     let tag = plan.tag();
 
@@ -265,9 +325,39 @@ fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
         run_tests: !opts.skip_checks && config.checks.tests,
         lint_command: config.checks.lint_command.clone(),
         test_command: config.checks.test_command.clone(),
+        allow_untracked: config.checks.allow_untracked,
         allow_uncommitted: plan.allow_dirty_tree,
     };
     checks::run_preflight(&root, &tag, project.as_ref(), &check_options)?;
+
+    let changelog_path = root.join("CHANGELOG.md");
+    let existing = std::fs::read_to_string(&changelog_path).ok();
+    let release_commit_already_prepared = plan.mutation == Mutation::None
+        && !git::has_tracked_changes(&root)?
+        && existing.as_deref().is_some_and(|content| {
+            changelog::version_exists_in_changelog(content, &plan.target.to_string())
+        });
+
+    // A clean tree with the target version already present in the changelog is
+    // the state produced by `--prepare` (and by an interrupted run after its
+    // commit succeeded). Do not replay bump hooks or artifact generators: they
+    // may have external or non-idempotent side effects. Only the tag/push phase
+    // remains.
+    if release_commit_already_prepared {
+        output::print_step("Nothing to commit (release commit already exists)");
+        if opts.dry_run {
+            eprintln!("\n--- Dry run: no changes made ---");
+            if let Some(preview) = existing
+                .as_deref()
+                .and_then(|content| changelog::extract_section(content, &plan.target.to_string()))
+            {
+                eprintln!("\nChangelog preview:\n");
+                eprintln!("{preview}");
+            }
+            return Ok(());
+        }
+        return finish_release(&root, &config, &tag, opts.no_push, prepare);
+    }
 
     // Pre-bump hook
     if !opts.dry_run {
@@ -349,18 +439,21 @@ fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
     )
     .map_err(Error::CheckFailed)?;
 
-    let changelog_path = root.join("CHANGELOG.md");
-    let existing = std::fs::read_to_string(&changelog_path).ok();
-
     // Guard against duplicate sections when resuming after changelog was written.
     let changelog_already_written = existing
         .as_deref()
         .is_some_and(|c| changelog::version_exists_in_changelog(c, &plan.target.to_string()));
-    let (full_changelog, promoted) = if changelog_already_written {
-        (existing.clone().unwrap_or_default(), false)
+    let (full_changelog, promoted, replaced_generated_entries) = if changelog_already_written {
+        (existing.clone().unwrap_or_default(), false, 0)
     } else {
-        let update = changelog::integrate_changelog(existing.as_deref(), &changelog_section);
-        (update.content, update.promoted)
+        let update =
+            changelog::integrate_changelog_checked(existing.as_deref(), &changelog_section)
+                .map_err(Error::CheckFailed)?;
+        (
+            update.content,
+            update.promoted,
+            update.replaced_generated_entries,
+        )
     };
 
     let entry_count = commits
@@ -373,7 +466,9 @@ fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
             "Changelog already up-to-date ({entry_count} entries)"
         ));
     } else if promoted {
-        output::print_step("Promoted [Unreleased] section");
+        output::print_step(&format!(
+            "Promoted curated Unreleased notes ({replaced_generated_entries} generated entries replaced)"
+        ));
     } else {
         output::print_step(&format!("Generated changelog ({entry_count} entries)"));
     }
@@ -435,21 +530,39 @@ fn execute(plan: ReleasePlan, opts: ExecOpts) -> Result<()> {
         output::print_step("Nothing to commit (release commit already exists)");
     }
 
-    git::create_tag(&root, &tag)?;
-    output::print_step(&format!("Tagged: {tag}"));
+    finish_release(&root, &config, &tag, opts.no_push, prepare)
+}
 
-    if opts.no_push {
-        output::print_step(&format!("Ready to push: git push origin main {tag}"));
+fn finish_release(
+    root: &std::path::Path,
+    config: &Config,
+    tag: &str,
+    no_push: bool,
+    prepare: bool,
+) -> Result<()> {
+    if prepare {
+        output::print_step(&format!(
+            "Prepared release commit for {tag}; review it, then run `vership release` to tag and push"
+        ));
         return Ok(());
     }
 
-    hooks::run_hook(&root, "pre-push", config.hooks.pre_push.as_deref())?;
+    git::create_tag(root, tag)?;
+    output::print_step(&format!("Tagged: {tag}"));
 
-    let branch = git::current_branch(&root)?;
-    git::push_with_tag(&root, &branch, &tag)?;
+    if no_push {
+        let branch = git::current_branch(root)?;
+        output::print_step(&format!("Ready to push: git push origin {branch} {tag}"));
+        return Ok(());
+    }
+
+    hooks::run_hook(root, "pre-push", config.hooks.pre_push.as_deref())?;
+
+    let branch = git::current_branch(root)?;
+    git::push_with_tag(root, &branch, tag)?;
     output::print_step("Pushed to origin");
 
-    hooks::run_hook(&root, "post-push", config.hooks.post_push.as_deref())?;
+    hooks::run_hook(root, "post-push", config.hooks.post_push.as_deref())?;
 
     Ok(())
 }
