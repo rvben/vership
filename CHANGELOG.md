@@ -6,9 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.22](https://github.com/rvben/vership/compare/v0.5.21...v0.5.22) - 2026-09-05
+
 ### Fixed
 
 - **changelog**: rewrite reference-style version headings and links to inline links before their `[x.y.z]:` definitions are stripped
+- **changelog**: merge generated entries into curated Unreleased notes ([fcec838](https://github.com/rvben/vership/commit/fcec838f8872b418c773742062b4b9527dea830d))
 
 ## [0.5.21](https://github.com/rvben/vership/compare/v0.5.20...v0.5.21) - 2026-09-01
 
