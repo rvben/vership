@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.23](https://github.com/rvben/vership/compare/v0.5.22...v0.5.23) - 2026-09-05
+
+### Fixed
+
+- **update-local**: follow a mise shim to the executable it hands off to ([1797ec4](https://github.com/rvben/vership/commit/1797ec464c799eac51c9ea45a87cf4f07ea1254a))
+
 ## [0.5.22](https://github.com/rvben/vership/compare/v0.5.21...v0.5.22) - 2026-09-05
 
 ### Fixed
