@@ -7,12 +7,26 @@ use super::managers::{Install, Manager, brew_keg_version};
 pub struct Copy {
     /// The path as `$PATH` yields it.
     pub path: PathBuf,
+    /// The executable this copy hands off to when it is a version manager's
+    /// shim rather than the program itself. The shim runs nothing of its own,
+    /// so the manager and version below are the target's.
+    pub dispatches_to: Option<PathBuf>,
     /// The manager that owns this file, by resolved file identity. `None` is an
     /// unmanaged copy: something we did not install and will not update.
     pub manager: Option<Manager>,
     /// The owning manager's reported version. Never guessed for an unmanaged
     /// copy, which is why it is optional rather than a placeholder.
     pub version: Option<String>,
+}
+
+impl Copy {
+    /// Where this copy is, and where it leads when it is a shim.
+    pub fn location(&self) -> String {
+        match &self.dispatches_to {
+            Some(target) => format!("{} -> {}", self.path.display(), target.display()),
+            None => self.path.display().to_string(),
+        }
+    }
 }
 
 /// Every copy of one executable name, in `$PATH` order. The first entry is
@@ -36,14 +50,18 @@ impl BinaryReport {
 /// Find every copy of `names` on `dirs`, in order, attributed to the install
 /// that owns it.
 ///
-/// `is_exec` and `canonicalize` are injected so the walk, the deduplication and
-/// the attribution rules are testable without touching the real filesystem.
+/// `is_exec`, `canonicalize` and `dispatch` are injected so the walk, the
+/// deduplication and the attribution rules are testable without touching the
+/// real filesystem. `dispatch` answers, for a resolved file and the name it was
+/// reached under, which executable a shim of that name hands off to, and `None`
+/// for a file that is the program itself.
 pub(crate) fn scan(
     dirs: &[PathBuf],
     names: &[String],
     installs: &[Install],
     is_exec: impl Fn(&Path) -> bool,
     canonicalize: impl Fn(&Path) -> Option<PathBuf>,
+    dispatch: impl Fn(&Path, &str) -> Option<PathBuf>,
 ) -> Vec<BinaryReport> {
     names
         .iter()
@@ -59,7 +77,17 @@ pub(crate) fn scan(
                 // literal duplicates or through a symlinked directory. Identity
                 // is the resolved file, so the same executable is reported once,
                 // under the spelling `$PATH` reaches first.
-                let real = canonicalize(&candidate).unwrap_or_else(|| candidate.clone());
+                let mut real = canonicalize(&candidate).unwrap_or_else(|| candidate.clone());
+                // A version manager's shim is one file standing in for every
+                // program it has ever installed: what runs is whatever it
+                // resolves the name to. Identity, ownership and version are
+                // therefore the target's, and a later `$PATH` entry reaching
+                // that same target is the same executable, not a second copy
+                // shadowed behind the shim.
+                let dispatches_to = dispatch(&real, name);
+                if let Some(target) = &dispatches_to {
+                    real = canonicalize(target).unwrap_or_else(|| target.clone());
+                }
                 if seen.contains(&real) {
                     continue;
                 }
@@ -67,6 +95,7 @@ pub(crate) fn scan(
                 let (manager, version) = attribution(&real, installs);
                 copies.push(Copy {
                     path: candidate,
+                    dispatches_to,
                     manager,
                     version,
                 });
@@ -112,6 +141,41 @@ fn attribute<'a>(real: &Path, installs: &'a [Install]) -> Option<&'a Install> {
                 .iter()
                 .find(|i| i.root.as_deref().is_some_and(|root| real.starts_with(root)))
         })
+}
+
+/// The executable a mise shim of `name` hands off to, or `None` when `real` is
+/// not the mise binary.
+///
+/// mise fills its shims directory with one symlink to itself per executable of
+/// every tool it has installed, keeps the shim after the tool is gone, and
+/// puts that directory ahead of everything else on `$PATH`. Invoked, a shim
+/// runs whatever `mise which <name>` resolves, which falls through to the next
+/// copy on `$PATH` when mise manages none: a cargo or uv install, typically.
+/// The very binary the shim links to is asked, so the answer is the one the
+/// shell would get. A shim mise resolves nothing for stays a copy of its own
+/// and is reported unmanaged, which is also what running it would amount to.
+pub(crate) fn mise_shim_target(real: &Path, name: &str) -> Option<PathBuf> {
+    if !is_mise(real) {
+        return None;
+    }
+    let output = std::process::Command::new(real)
+        .args(["which", name])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let target = String::from_utf8(output.stdout).ok()?;
+    let target = target.trim();
+    (!target.is_empty()).then(|| PathBuf::from(target))
+}
+
+/// Whether a resolved executable is the mise binary, which is what every mise
+/// shim is a symlink to.
+fn is_mise(real: &Path) -> bool {
+    real.file_stem().is_some_and(|stem| stem == "mise")
 }
 
 /// Whether `path` is a file this shell would execute. Follows symlinks, so a
@@ -222,6 +286,7 @@ mod tests {
                         .unwrap_or_else(|| p.to_path_buf()),
                 )
             },
+            |_, _| None,
         )
         .remove(0)
     }
@@ -299,10 +364,80 @@ mod tests {
             &installs,
             |_| true,
             |p| Some(p.to_path_buf()),
+            |_, _| None,
         )
         .remove(0);
         assert_eq!(report.copies.len(), 1);
         assert_eq!(report.winner().unwrap().manager, None);
+    }
+
+    #[test]
+    fn a_mise_shim_is_the_copy_it_dispatches_to() {
+        // mise's shim directory precedes cargo's on `$PATH`; the shim is a
+        // symlink to the mise binary, which resolves the name to cargo's copy.
+        let path = dirs(&["/home/u/mise/shims", "/home/u/.cargo/bin"]);
+        let installs = vec![install(
+            Manager::Cargo,
+            "0.5.22",
+            &["/home/u/.cargo/bin/vership"],
+            None,
+        )];
+        let shim = PathBuf::from("/home/u/mise/shims/vership");
+        let mise = PathBuf::from("/home/u/.local/bin/mise");
+        let target = PathBuf::from("/home/u/.cargo/bin/vership");
+        let scan_with = |dispatch: &dyn Fn(&Path, &str) -> Option<PathBuf>| {
+            scan(
+                &path,
+                &["vership".to_string()],
+                &installs,
+                |_| true,
+                |p| {
+                    Some(if p == shim {
+                        mise.clone()
+                    } else {
+                        p.to_path_buf()
+                    })
+                },
+                dispatch,
+            )
+            .remove(0)
+        };
+
+        let report =
+            scan_with(&|real, name| (real == mise && name == "vership").then(|| target.clone()));
+        let winner = report.winner().unwrap();
+        assert_eq!(winner.path, shim);
+        assert_eq!(winner.dispatches_to.as_deref(), Some(target.as_path()));
+        assert_eq!(winner.manager, Some(Manager::Cargo));
+        assert_eq!(winner.version.as_deref(), Some("0.5.22"));
+        assert_eq!(
+            winner.location(),
+            "/home/u/mise/shims/vership -> /home/u/.cargo/bin/vership"
+        );
+        // Cargo's copy is the target itself, not a second copy behind the shim.
+        assert!(report.shadowed().is_empty());
+
+        // Negative control: a shim mise resolves nothing for is a copy of its
+        // own, unmanaged, with cargo's copy shadowed behind it.
+        let report = scan_with(&|_, _| None);
+        let winner = report.winner().unwrap();
+        assert_eq!(winner.dispatches_to, None);
+        assert_eq!(winner.manager, None);
+        assert_eq!(winner.location(), "/home/u/mise/shims/vership");
+        assert_eq!(report.shadowed().len(), 1);
+    }
+
+    #[test]
+    fn only_the_mise_binary_is_asked_where_a_shim_leads() {
+        assert!(is_mise(Path::new("/home/u/.local/bin/mise")));
+        assert!(is_mise(Path::new("C:/Users/u/AppData/Local/mise/mise.exe")));
+        assert!(!is_mise(Path::new("/home/u/.cargo/bin/vership")));
+        assert!(!is_mise(Path::new("/home/u/.cargo/bin/mise-en-place")));
+        // The production dispatcher never runs anything that is not mise.
+        assert_eq!(
+            mise_shim_target(Path::new("/home/u/.cargo/bin/vership"), "vership"),
+            None
+        );
     }
 
     #[test]
@@ -329,6 +464,7 @@ mod tests {
                     "/opt/brew/lib/node_modules/@doist/todoist-cli/dist/index.js",
                 ))
             },
+            |_, _| None,
         )
         .remove(0);
         assert_eq!(report.winner().unwrap().manager, Some(Manager::Npm));
@@ -371,6 +507,7 @@ mod tests {
             &[],
             |_| false,
             |p| Some(p.to_path_buf()),
+            |_, _| None,
         )
         .remove(0);
         assert!(report.copies.is_empty());

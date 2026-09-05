@@ -338,7 +338,7 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                         "name": "binaries",
                         "type": "array",
                         "items": {"type": "object"},
-                        "description": "Per-executable $PATH resolution: {name, path, manager, version, shadowed}; path is the copy the shell runs, shadowed lists the copies behind it. A null path means the name was looked for and not found. A null manager is an unmanaged copy, whose version is deliberately not guessed. The names scanned are the project's own declared binaries as well as any an install provides, so a stale copy is still caught when no manager holds the package."
+                        "description": "Per-executable $PATH resolution: {name, path, dispatches_to, manager, version, shadowed}; path is the copy the shell runs, shadowed lists the copies behind it, each with the same fields. dispatches_to is the executable the copy hands off to when it is a mise shim, whose manager and version are then reported; null for a program itself. A null path means the name was looked for and not found. A null manager is an unmanaged copy, whose version is deliberately not guessed. The names scanned are the project's own declared binaries as well as any an install provides, so a stale copy is still caught when no manager holds the package."
                     },
                     {
                         "name": "considered",

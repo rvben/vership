@@ -116,9 +116,14 @@ pub fn run(
     let dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
-    let binaries = pathscan::scan(&dirs, &names, &current, pathscan::is_executable, |path| {
-        std::fs::canonicalize(path).ok()
-    });
+    let binaries = pathscan::scan(
+        &dirs,
+        &names,
+        &current,
+        pathscan::is_executable,
+        |path| std::fs::canonicalize(path).ok(),
+        pathscan::mise_shim_target,
+    );
 
     let verdict = verdict(&reports, &binaries, &version);
     report::render(
@@ -594,7 +599,7 @@ fn verdict(reports: &[InstallReport], binaries: &[BinaryReport], version: &str) 
             continue;
         }
         let name = &binary.name;
-        let path = winner.path.display();
+        let path = winner.location();
         // A version nothing on this machine can read is not evidence of the
         // wrong version, and "not <version>" asserts exactly that. An unmanaged
         // copy is still the failure being reported whatever it holds: it was
@@ -1070,6 +1075,7 @@ mod tests {
                 .into_iter()
                 .map(|(path, manager, version)| Copy {
                     path: PathBuf::from(path),
+                    dispatches_to: None,
                     manager,
                     version: version.map(str::to_string),
                 })

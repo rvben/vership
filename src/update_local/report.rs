@@ -62,10 +62,12 @@ fn render_json(report: &Report<'_>) {
             json!({
                 "name": b.name,
                 "path": winner.map(|c| c.path.display().to_string()),
+                "dispatches_to": winner.and_then(dispatches_to),
                 "manager": winner.and_then(|c| c.manager).map(|m| m.name()),
                 "version": winner.and_then(|c| c.version.clone()),
                 "shadowed": b.shadowed().iter().map(|c| json!({
                     "path": c.path.display().to_string(),
+                    "dispatches_to": dispatches_to(c),
                     "manager": c.manager.map(|m| m.name()),
                     "version": c.version,
                 })).collect::<Vec<_>>(),
@@ -148,7 +150,7 @@ fn render_text(report: &Report<'_>) {
                     (false, true) => "ok  ",
                     (false, false) => "FAIL",
                 };
-                (mark, format!("{} ({})", c.path.display(), describe(c)))
+                (mark, format!("{} ({})", c.location(), describe(c)))
             }
         };
         println!("  {mark} {:<NAME$} {detail}", b.name);
@@ -156,11 +158,18 @@ fn render_text(report: &Report<'_>) {
             println!(
                 "  {:NAME$}      shadowed {} ({})",
                 "",
-                c.path.display(),
+                c.location(),
                 describe(c)
             );
         }
     }
+}
+
+/// The executable a shim hands off to, for the JSON report.
+fn dispatches_to(copy: &Copy) -> Option<String> {
+    copy.dispatches_to
+        .as_ref()
+        .map(|target| target.display().to_string())
 }
 
 fn mark(action: Action) -> &'static str {
