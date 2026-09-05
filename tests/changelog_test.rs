@@ -1,6 +1,7 @@
 use vership::changelog::{
-    ConventionalCommit, extract_section, generate_changelog, generate_changelog_with_mode,
-    integrate_changelog_checked, parse_conventional_commit, version_exists_in_changelog,
+    ConventionalCommit, CuratedPolicy, entry_summary, extract_section, generate_changelog,
+    generate_changelog_with_mode, integrate_changelog_checked, integrate_changelog_with_policy,
+    parse_conventional_commit, version_exists_in_changelog,
 };
 use vership::git::Commit;
 
@@ -393,8 +394,9 @@ fn integrate_without_unreleased_prepends_above_latest() {
 #[test]
 fn integrate_promotes_curated_unreleased_content() {
     let existing = "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- hand written fix\n\n## [0.1.5] - 2026-05-01\n\n### Added\n\n- prior\n";
-    // Generated section body is intentionally different to prove curated content wins.
-    let section = "## [0.1.6](https://example.com/compare/v0.1.5...v0.1.6) - 2026-05-22\n\n### Added\n\n- generated entry that should NOT appear\n";
+    // The generated section covers a commit the curated notes say nothing
+    // about, so promotion must carry both into the release.
+    let section = "## [0.1.6](https://example.com/compare/v0.1.5...v0.1.6) - 2026-05-22\n\n### Added\n\n- generated entry for an uncovered commit\n";
     let result = integrate_changelog_checked(Some(existing), section).unwrap();
 
     // A fresh empty [Unreleased] sits at the top.
@@ -405,20 +407,27 @@ fn integrate_promotes_curated_unreleased_content() {
     assert!(release_pos < prior_pos);
 
     // The promoted section keeps the curated content and the generated header (with link).
-    assert!(result.content.contains("- hand written fix"));
-    assert!(
-        result
-            .content
-            .contains("## [0.1.6](https://example.com/compare/v0.1.5...v0.1.6) - 2026-05-22")
-    );
-    // Curated content wins: the generated body is discarded.
-    assert!(
-        !result
-            .content
-            .contains("generated entry that should NOT appear")
+    let released = extract_section(&result.content, "0.1.6").unwrap();
+    assert_eq!(
+        released,
+        "## [0.1.6](https://example.com/compare/v0.1.5...v0.1.6) - 2026-05-22\n\
+         \n\
+         ### Fixed\n\
+         \n\
+         - hand written fix\n\
+         \n\
+         ### Added\n\
+         \n\
+         - generated entry for an uncovered commit",
+        "curated notes first, then the generated section they lack, got:\n{released}"
     );
     assert!(result.promoted, "curated content was promoted");
-    assert_eq!(result.replaced_generated_entries, 1);
+    assert_eq!(result.replaced_generated_entries, 0);
+    assert_eq!(
+        result.merged_entries,
+        vec!["generated entry for an uncovered commit".to_string()]
+    );
+    assert!(result.omitted_entries.is_empty());
 }
 
 #[test]
@@ -431,8 +440,350 @@ fn integrate_promotes_unbracketed_unreleased_content() {
     assert!(result.promoted);
     assert!(result.content.contains("## [0.1.6] - 2026-05-22"));
     assert!(result.content.contains("- hand written analytics"));
-    assert!(!result.content.contains("- generated fix"));
+    assert!(
+        result.content.contains("### Fixed\n\n- generated fix"),
+        "the generated fix must survive an unbracketed promotion, got:\n{}",
+        result.content
+    );
     assert_eq!(result.content.matches("## [Unreleased]").count(), 1);
+}
+
+#[test]
+fn merge_appends_generated_entries_to_the_matching_curated_sections() {
+    let existing = "# Changelog\n\
+        \n\
+        ## [Unreleased]\n\
+        \n\
+        ### Added\n\
+        \n\
+        - curated feature\n\
+        \n\
+        ### Fixed\n\
+        \n\
+        - curated fix\n\
+        \n\
+        ## [0.1.5] - 2026-05-01\n";
+    let section = "## [0.1.6] - 2026-05-22\n\
+        \n\
+        ### Added\n\
+        \n\
+        - **cli**: generated feature\n\
+        \n\
+        ### Fixed\n\
+        \n\
+        - **lsp**: generated fix one\n\
+        - **lsp**: generated fix two\n";
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
+
+    let released = extract_section(&result.content, "0.1.6").unwrap();
+    assert_eq!(
+        released,
+        "## [0.1.6] - 2026-05-22\n\
+         \n\
+         ### Added\n\
+         \n\
+         - curated feature\n\
+         - **cli**: generated feature\n\
+         \n\
+         ### Fixed\n\
+         \n\
+         - curated fix\n\
+         - **lsp**: generated fix one\n\
+         - **lsp**: generated fix two",
+        "got:\n{released}"
+    );
+    assert_eq!(result.merged_entries.len(), 3);
+    assert_eq!(result.replaced_generated_entries, 0);
+}
+
+#[test]
+fn merge_adds_the_sections_the_curated_notes_lack_in_generated_order() {
+    let existing = "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- curated change\n\n## [0.1.5] - 2026-05-01\n";
+    let section = "## [0.1.6] - 2026-05-22\n\
+        \n\
+        ### Breaking Changes\n\
+        \n\
+        - **api**: drop v1\n\
+        \n\
+        ### Added\n\
+        \n\
+        - **cli**: new flag\n\
+        \n\
+        ### Changed\n\
+        \n\
+        - **cli**: generated change\n\
+        \n\
+        ### Fixed\n\
+        \n\
+        - **cli**: generated fix\n";
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
+
+    let released = extract_section(&result.content, "0.1.6").unwrap();
+    assert_eq!(
+        released,
+        "## [0.1.6] - 2026-05-22\n\
+         \n\
+         ### Changed\n\
+         \n\
+         - curated change\n\
+         - **cli**: generated change\n\
+         \n\
+         ### Breaking Changes\n\
+         \n\
+         - **api**: drop v1\n\
+         \n\
+         ### Added\n\
+         \n\
+         - **cli**: new flag\n\
+         \n\
+         ### Fixed\n\
+         \n\
+         - **cli**: generated fix",
+        "got:\n{released}"
+    );
+}
+
+#[test]
+fn merge_omits_a_generated_entry_whose_commit_the_curated_notes_cite() {
+    let existing = "# Changelog\n\
+        \n\
+        ## [Unreleased]\n\
+        \n\
+        ### Fixed\n\
+        \n\
+        - stop reading a lazy continuation as a setext underline ([2c486b7](https://github.com/o/r/commit/2c486b7e3cb45ffe666dc985275ddd0c60c92087))\n\
+        - report document-level fixes as fixed, see commit 7e767a9746e8d74051c6a3c6953af5e68946290c\n\
+        \n\
+        ```text\n\
+        - a fenced example citing 134347b is content, not a citation\n\
+        ```\n\
+        \n\
+        ## [0.1.5] - 2026-05-01\n";
+    let section = "## [0.1.6] - 2026-05-22\n\
+        \n\
+        ### Fixed\n\
+        \n\
+        - **lint**: lazy continuation ([2c486b7](https://github.com/o/r/commit/2c486b7e3cb45ffe666dc985275ddd0c60c92087))\n\
+        - **cli**: document-level fixes ([7e767a9](https://github.com/o/r/commit/7e767a9746e8d74051c6a3c6953af5e68946290c))\n\
+        - **cli**: canonical batch paths ([134347b](https://github.com/o/r/commit/134347b3442779eca7656601464138315409fe83))\n\
+        - **MD057**: closed-world self reference ([48675c1](https://github.com/o/r/commit/48675c13ccbfe5e492cd95263a39883a5c8ea5e4))\n";
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
+
+    let released = extract_section(&result.content, "0.1.6").unwrap();
+    assert!(
+        !released.contains("**lint**: lazy continuation"),
+        "an entry cited by short hash must not be duplicated, got:\n{released}"
+    );
+    assert!(
+        !released.contains("**cli**: document-level fixes"),
+        "an entry cited by full hash in prose must not be duplicated, got:\n{released}"
+    );
+    assert!(
+        released.ends_with(
+            "```\n\
+             \n\
+             - **cli**: canonical batch paths ([134347b](https://github.com/o/r/commit/134347b3442779eca7656601464138315409fe83))\n\
+             - **MD057**: closed-world self reference ([48675c1](https://github.com/o/r/commit/48675c13ccbfe5e492cd95263a39883a5c8ea5e4))"
+        ),
+        "uncited entries follow the curated section after a blank line, got:\n{released}"
+    );
+    assert_eq!(result.merged_entries.len(), 2);
+    assert_eq!(result.omitted_entries.len(), 2);
+    assert_eq!(result.replaced_generated_entries, 2);
+    assert!(
+        result.omitted_entries[0].starts_with("**lint**: lazy continuation"),
+        "got {:?}",
+        result.omitted_entries
+    );
+}
+
+#[test]
+fn merge_keeps_entries_under_no_heading_ahead_of_the_curated_sections() {
+    let existing =
+        "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- curated fix\n\n## [0.1.5] - 2026-05-01\n";
+    let section = "## [0.1.6] - 2026-05-22\n\n- bare generated entry\n";
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
+
+    let released = extract_section(&result.content, "0.1.6").unwrap();
+    assert_eq!(
+        released,
+        "## [0.1.6] - 2026-05-22\n\
+         \n\
+         - bare generated entry\n\
+         \n\
+         ### Fixed\n\
+         \n\
+         - curated fix",
+        "got:\n{released}"
+    );
+}
+
+#[test]
+fn merge_separates_appended_entries_from_curated_prose_and_ignores_fenced_headings() {
+    let existing = "# Changelog\n\
+        \n\
+        ## [Unreleased]\n\
+        \n\
+        ### Fixed\n\
+        \n\
+        - curated fix\n\
+        \n\
+        Some prose explaining the fix.\n\
+        \n\
+        ```md\n\
+        ### Added\n\
+        ```\n\
+        ## [0.1.5] - 2026-05-01\n";
+    let section = "## [0.1.6] - 2026-05-22\n\n### Fixed\n\n- generated fix\n\n### Added\n\n- generated feature\n";
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
+
+    let released = extract_section(&result.content, "0.1.6").unwrap();
+    assert_eq!(
+        released,
+        "## [0.1.6] - 2026-05-22\n\
+         \n\
+         ### Fixed\n\
+         \n\
+         - curated fix\n\
+         \n\
+         Some prose explaining the fix.\n\
+         \n\
+         ```md\n\
+         ### Added\n\
+         ```\n\
+         \n\
+         - generated fix\n\
+         \n\
+         ### Added\n\
+         \n\
+         - generated feature",
+        "a fenced `### Added` is content, so the real one is appended, got:\n{released}"
+    );
+}
+
+#[test]
+fn replace_policy_drops_every_generated_entry_and_reports_each() {
+    let existing = "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- hand written fix\n\n## [0.1.5] - 2026-05-01\n";
+    let section =
+        "## [0.1.6] - 2026-05-22\n\n### Added\n\n- generated one\n\n### Fixed\n\n- generated two\n";
+    let result =
+        integrate_changelog_with_policy(Some(existing), section, CuratedPolicy::Replace).unwrap();
+
+    let released = extract_section(&result.content, "0.1.6").unwrap();
+    assert_eq!(
+        released,
+        "## [0.1.6] - 2026-05-22\n\n### Fixed\n\n- hand written fix"
+    );
+    assert!(result.promoted);
+    assert!(result.merged_entries.is_empty());
+    assert_eq!(
+        result.omitted_entries,
+        vec!["generated one".to_string(), "generated two".to_string()]
+    );
+    assert_eq!(result.replaced_generated_entries, 2);
+}
+
+#[test]
+fn curated_policy_round_trips_its_documented_spellings() {
+    assert_eq!(CuratedPolicy::parse("merge"), Some(CuratedPolicy::Merge));
+    assert_eq!(
+        CuratedPolicy::parse("replace"),
+        Some(CuratedPolicy::Replace)
+    );
+    assert_eq!(CuratedPolicy::parse("Merge"), None);
+    assert_eq!(CuratedPolicy::parse("keep"), None);
+    assert_eq!(CuratedPolicy::default(), CuratedPolicy::Merge);
+    assert_eq!(CuratedPolicy::Merge.as_str(), "merge");
+    assert_eq!(CuratedPolicy::Replace.as_str(), "replace");
+}
+
+#[test]
+fn entry_summary_shortens_the_commit_link_for_terminal_reports() {
+    assert_eq!(
+        entry_summary(
+            "**cli**: add flag ([fc410f7](https://github.com/o/r/commit/fc410f77a2167e1229eebfcc8c6ccd269e818fe5))"
+        ),
+        "**cli**: add flag (fc410f7)"
+    );
+    assert_eq!(
+        entry_summary("**cli**: add flag (fc410f7)"),
+        "**cli**: add flag (fc410f7)"
+    );
+    assert_eq!(entry_summary("plain entry"), "plain entry");
+}
+
+#[test]
+fn promotion_inlines_every_reference_link_a_stripped_definition_served() {
+    let existing = "# Changelog\n\
+        \n\
+        ## [Unreleased]\n\
+        \n\
+        ### Fixed\n\
+        \n\
+        - regression from [0.1.4], see [the notes][0.1.4] and [0.1.4][]\n\
+        - `[0.1.4]` inside a code span is literal\n\
+        - [0.1.4](https://already.test/inline) stays inline\n\
+        - ![0.1.4][0.1.4] is an image, not a link\n\
+        - read [contributing] first\n\
+        \n\
+        ## [0.1.5] - 2026-05-01\n\
+        \n\
+        - prior\n\
+        \n\
+        ## [0.1.4] - 2026-04-01\n\
+        \n\
+        - older\n\
+        \n\
+        ```md\n\
+        ## [0.1.3] - 2026-03-01\n\
+        [0.1.3]: https://fenced.test/example\n\
+        ```\n\
+        \n\
+        [Unreleased]: https://github.com/o/r/compare/v0.1.5...HEAD\n\
+        [0.1.5]: <https://github.com/o/r/compare/v0.1.4...v0.1.5>\n\
+        [0.1.4]: https://github.com/o/r/compare/v0.1.3...v0.1.4\n\
+        [0.1.4]: https://ignored.test/second-definition\n\
+        [contributing]: https://github.com/o/r/blob/main/CONTRIBUTING.md\n";
+    let section = "## [0.1.6](https://github.com/o/r/compare/v0.1.5...v0.1.6) - 2026-05-22\n\n### Added\n\n- gen\n";
+    let result = integrate_changelog_checked(Some(existing), section).unwrap();
+
+    assert_eq!(
+        result.content,
+        "# Changelog\n\
+         \n\
+         ## [Unreleased]\n\
+         \n\
+         ## [0.1.6](https://github.com/o/r/compare/v0.1.5...v0.1.6) - 2026-05-22\n\
+         \n\
+         ### Fixed\n\
+         \n\
+         - regression from [0.1.4](https://github.com/o/r/compare/v0.1.3...v0.1.4), see [the notes](https://github.com/o/r/compare/v0.1.3...v0.1.4) and [0.1.4](https://github.com/o/r/compare/v0.1.3...v0.1.4)\n\
+         - `[0.1.4]` inside a code span is literal\n\
+         - [0.1.4](https://already.test/inline) stays inline\n\
+         - ![0.1.4][0.1.4] is an image, not a link\n\
+         - read [contributing] first\n\
+         \n\
+         ### Added\n\
+         \n\
+         - gen\n\
+         \n\
+         ## [0.1.5](https://github.com/o/r/compare/v0.1.4...v0.1.5) - 2026-05-01\n\
+         \n\
+         - prior\n\
+         \n\
+         ## [0.1.4](https://github.com/o/r/compare/v0.1.3...v0.1.4) - 2026-04-01\n\
+         \n\
+         - older\n\
+         \n\
+         ```md\n\
+         ## [0.1.3] - 2026-03-01\n\
+         [0.1.3]: https://fenced.test/example\n\
+         ```\n\
+         \n\
+         [contributing]: https://github.com/o/r/blob/main/CONTRIBUTING.md\n",
+        "got:\n{}",
+        result.content
+    );
 }
 
 #[test]
@@ -817,8 +1168,16 @@ fn promoting_curated_content_leaves_one_blank_line_before_the_prior_release() {
 
     assert!(result.promoted);
     assert!(
-        result.content.contains("- curated\n\n## [0.1.1]"),
-        "curated body must be one blank line above the prior release, got:\n{}",
+        result
+            .content
+            .contains("- curated\n\n### Fixed\n\n- fix 2\n\n## [0.1.1]"),
+        "the promoted body, curated notes then the merged generated section, must be one blank line above the prior release, got:\n{}",
+        result.content
+    );
+    assert_eq!(
+        longest_blank_run(&result.content),
+        1,
+        "got:\n{}",
         result.content
     );
 }

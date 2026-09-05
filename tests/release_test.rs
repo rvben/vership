@@ -95,28 +95,37 @@ fn bump_promotes_curated_unreleased_section() {
         .get_output()
         .clone();
 
-    // Gap: the status line must reflect that curated content was promoted,
-    // not claim a changelog was generated from commits.
+    // The status line must reflect that curated content was promoted and name
+    // the generated entry that joined it, not claim a changelog was generated
+    // from commits.
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert!(
-        stderr.contains("Promoted curated Unreleased notes (1 generated entries replaced)"),
+        stderr.contains("Promoted curated Unreleased notes (1 generated entry merged)"),
         "expected promotion status message, got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("merged: real bug fix since release"),
+        "each merged entry is listed, got stderr:\n{stderr}"
     );
     assert!(
         !stderr.contains("Generated changelog"),
         "promotion must not be reported as generation, got stderr:\n{stderr}"
     );
 
-    // The curated content landed under the new release on disk.
+    // The curated content landed under the new release on disk, with the
+    // generated entry for the commit it did not cover.
     let written = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
     let unreleased = written.find("## [Unreleased]").expect("unreleased heading");
     let new_release = written.find("## [0.1.6]").expect("new release heading");
     let prior = written.find("## [0.1.5]").expect("prior release heading");
     assert!(unreleased < new_release, "fresh [Unreleased] sits on top");
     assert!(new_release < prior, "new release sits above the prior one");
+    let released = vership::changelog::extract_section(&written, "0.1.6").unwrap();
     assert!(
-        written.contains("- hand written fix that must survive promotion"),
-        "curated entry must carry into the release"
+        released.contains(
+            "### Fixed\n\n- hand written fix that must survive promotion\n- real bug fix since release"
+        ),
+        "curated entry carries into the release and the generated one follows it, got:\n{released}"
     );
     assert_eq!(
         written.matches("## [Unreleased]").count(),
@@ -178,8 +187,19 @@ fn changelog_preview_uses_requested_level_and_curated_unbracketed_notes() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("## [0.2.0]"), "got:\n{stdout}");
     assert!(stdout.contains("- curated feature"), "got:\n{stdout}");
-    assert!(!stdout.contains("- release fix"), "got:\n{stdout}");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("1 generated entries replaced"));
+    assert!(
+        stdout.contains("### Fixed\n\n- release fix"),
+        "the preview shows the generated entry the notes lack, got:\n{stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Previewing curated Unreleased notes (1 generated entry merged)"),
+        "got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("merged: release fix"),
+        "got stderr:\n{stderr}"
+    );
     assert!(
         Command::new("git")
             .args(["status", "--porcelain"])
@@ -239,8 +259,184 @@ fn changelog_preview_shows_the_exact_curated_prepared_section() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("## [0.1.6]"), "got:\n{stdout}");
     assert!(stdout.contains("- curated release note"), "got:\n{stdout}");
-    assert!(!stdout.contains("- release fix"), "got:\n{stdout}");
+    assert!(
+        stdout.contains("### Fixed\n\n- release fix"),
+        "the prepared section carries the merged generated entry, got:\n{stdout}"
+    );
     assert_eq!(stdout.matches("## [0.1.6]").count(), 1);
+    let written = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+    let prepared = vership::changelog::extract_section(&written, "0.1.6").unwrap();
+    assert_eq!(
+        stdout.trim_end(),
+        prepared.trim_end(),
+        "the preview is the prepared section verbatim"
+    );
+}
+
+#[test]
+fn bump_with_replace_policy_lists_every_generated_entry_it_drops() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(
+        root,
+        "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- curated fix\n\n## [0.1.5] - 2026-05-01\n",
+    );
+    fs::write(
+        root.join("vership.toml"),
+        "[changelog]\ncurated = \"replace\"\n",
+    )
+    .unwrap();
+    git(root, &["add", "vership.toml"]);
+    git(root, &["commit", "-m", "chore: opt into replace"]);
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--no-push"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "Promoted curated Unreleased notes (1 generated entry replaced, changelog.curated = \"replace\")"
+        ),
+        "got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("replaced: release fix"),
+        "got stderr:\n{stderr}"
+    );
+
+    let written = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+    let released = vership::changelog::extract_section(&written, "0.1.6").unwrap();
+    assert!(
+        released.starts_with("## [0.1.6] - ")
+            && released.ends_with("\n\n### Fixed\n\n- curated fix"),
+        "the curated notes are the whole release, got:\n{released}"
+    );
+    assert!(
+        !released.contains("release fix"),
+        "replace drops the generated entry, got:\n{released}"
+    );
+}
+
+/// A curated note that cites a commit stands in for that commit's generated
+/// entry, while an uncited commit still lands, so the release ends up with
+/// every change exactly once and the report accounts for both.
+#[test]
+fn bump_omits_the_generated_entry_a_curated_note_cites_and_reports_it() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(
+        root,
+        "# Changelog\n\n## [Unreleased]\n\n## [0.1.5] - 2026-05-01\n",
+    );
+    // Generated entries carry a commit link only when a remote is configured,
+    // and the citation is matched against that link. A local bare repository
+    // keeps the tag lookup off the network.
+    let remote = TempDir::new().unwrap();
+    git(remote.path(), &["init", "--bare"]);
+    git(
+        root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(root, &["push", "origin", "main", "v0.1.5"]);
+    let cited = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let cited = String::from_utf8(cited.stdout).unwrap().trim().to_string();
+    let notes = format!(
+        "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- the fix, explained by hand ({})\n\n## [0.1.5] - 2026-05-01\n",
+        &cited[..7]
+    );
+    fs::write(root.join("CHANGELOG.md"), notes).unwrap();
+    git(root, &["add", "CHANGELOG.md"]);
+    git(root, &["commit", "-m", "docs: explain the fix"]);
+    fs::write(root.join("source.txt"), "faster").unwrap();
+    git(root, &["add", "source.txt"]);
+    git(root, &["commit", "-m", "perf: skip the second pass"]);
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--no-push"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "Promoted curated Unreleased notes (1 generated entry merged, 1 entry already cited)"
+        ),
+        "got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("merged: skip the second pass ("),
+        "the uncited entry is listed as merged, got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("cited:  release fix ({})", &cited[..7])),
+        "the cited entry is listed with its hash, got stderr:\n{stderr}"
+    );
+
+    let written = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+    let released = vership::changelog::extract_section(&written, "0.1.6").unwrap();
+    assert!(
+        released.contains(&format!(
+            "### Fixed\n\n- the fix, explained by hand ({})\n\n### Performance\n\n- skip the second pass ([",
+            &cited[..7]
+        )),
+        "the hand-written note stands alone under Fixed and the uncited commit follows in its own section, got:\n{released}"
+    );
+    assert_eq!(
+        released.matches("release fix").count(),
+        0,
+        "the cited commit's generated entry stays out, got:\n{released}"
+    );
+}
+
+#[test]
+fn bump_with_an_invalid_curated_policy_fails_closed() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(
+        root,
+        "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- curated fix\n\n## [0.1.5] - 2026-05-01\n",
+    );
+    fs::write(
+        root.join("vership.toml"),
+        "[changelog]\ncurated = \"keep\"\n",
+    )
+    .unwrap();
+    git(root, &["add", "vership.toml"]);
+    git(root, &["commit", "-m", "chore: misspell the policy"]);
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--no-push"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("changelog.curated must be merge or replace; got")
+            && stderr.contains("keep"),
+        "got stderr:\n{stderr}"
+    );
+    let unchanged = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+    assert!(
+        unchanged.contains("## [Unreleased]\n\n### Fixed\n\n- curated fix"),
+        "nothing may be promoted under an unknown policy, got:\n{unchanged}"
+    );
 }
 
 #[test]
@@ -905,7 +1101,8 @@ fn bump_strips_stale_changelog_link_refs() {
     assert!(written.contains("- curated fix"));
     assert!(written.contains("## [0.1.6]"));
 
-    // Stale version link-reference definitions are stripped on disk.
+    // Stale version link-reference definitions are stripped on disk, and the
+    // header that resolved through one keeps its link inline.
     assert!(
         !written.contains("[Unreleased]: https://github.com/o/r/compare/v0.1.5...HEAD"),
         "stale [Unreleased] ref must be gone, got:\n{written}"
@@ -913,6 +1110,10 @@ fn bump_strips_stale_changelog_link_refs() {
     assert!(
         !written.contains("[0.1.5]: https://github.com/o/r/releases/tag/v0.1.5"),
         "version ref must be gone, got:\n{written}"
+    );
+    assert!(
+        written.contains("## [0.1.5](https://github.com/o/r/releases/tag/v0.1.5) - 2026-05-01"),
+        "the prior header must still link to its release, got:\n{written}"
     );
 
     // Prose link-reference definitions survive.

@@ -227,10 +227,21 @@ canonical Keep a Changelog form) or `## Unreleased`. A fresh canonical
 malformed Unreleased headings stop the release rather than risking incomplete
 notes.
 
-When the Unreleased section contains curated content, that content is
-authoritative and replaces the generated commit entries. Vership reports the
-number of replaced entries, and both `vership changelog <level>` and
-`vership bump <level> --dry-run` show the exact section that would be released.
+When the Unreleased section contains curated content, the release keeps those
+notes and merges in the generated entries they do not cover. A generated entry
+joins the end of the curated section of the same name (`### Fixed` under
+`### Fixed`), sections the notes lack are appended in the generated order, and
+an entry is left out only when the notes cite its commit hash (`fixed the
+parser (abc1234)`), so a hand-written description can stand in for the
+generated line. Vership lists every merged and cited entry on stderr, and both
+`vership changelog <level>` and `vership bump <level> --dry-run` show the exact
+section that would be released.
+
+Set `changelog.curated = "replace"` in `vership.toml` to make the curated
+notes the whole release instead; every generated entry is then dropped and
+listed. Version link-reference definitions at the bottom of the file
+(`[1.2.0]: https://...`) are removed during promotion, and every heading or
+reference that used one is rewritten to an inline link first.
 
 ## Version Files
 
@@ -297,6 +308,8 @@ test_command = "npm test"     # Override default test command
 
 [changelog]
 unconventional = "exclude"   # "exclude", "include", or "strict"
+curated = "merge"            # "merge" generated entries into curated Unreleased
+                             # notes, or "replace" them with the notes
 ```
 
 ## Agent Integration

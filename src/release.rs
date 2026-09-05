@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::artifacts;
-use crate::changelog;
+use crate::changelog::{self, ChangelogIntegration, CuratedPolicy};
 use crate::checks::{self, CheckOptions};
 use crate::cli::BumpLevel;
 use crate::config::Config;
@@ -240,19 +240,66 @@ pub fn changelog_preview_for(level: BumpLevel) -> Result<()> {
         return Ok(());
     }
 
-    let update = changelog::integrate_changelog_checked(existing.as_deref(), &generated)
-        .map_err(Error::CheckFailed)?;
+    let curated_policy = Config::load_curated_policy(&root.join("vership.toml"))?;
+    let update =
+        changelog::integrate_changelog_with_policy(existing.as_deref(), &generated, curated_policy)
+            .map_err(Error::CheckFailed)?;
     if update.promoted {
-        output::print_step(&format!(
-            "Previewing curated Unreleased notes ({} generated entries replaced)",
-            update.replaced_generated_entries
-        ));
+        report_curated_promotion("Previewing", &update, curated_policy);
     }
     let changelog_section = changelog::extract_section(&update.content, &next_version.to_string())
         .unwrap_or(&generated);
 
     println!("{changelog_section}");
     Ok(())
+}
+
+/// Say what promoting the curated `## [Unreleased]` notes did to the entries
+/// generated from commits, entry by entry, so nothing leaves or enters the
+/// release unseen.
+fn report_curated_promotion(verb: &str, update: &ChangelogIntegration, policy: CuratedPolicy) {
+    fn counted(count: usize, singular: &str, plural: &str) -> String {
+        format!("{count} {}", if count == 1 { singular } else { plural })
+    }
+    match policy {
+        CuratedPolicy::Merge => {
+            let mut summary = format!(
+                "{verb} curated Unreleased notes ({} merged",
+                counted(
+                    update.merged_entries.len(),
+                    "generated entry",
+                    "generated entries"
+                )
+            );
+            if !update.omitted_entries.is_empty() {
+                summary.push_str(&format!(
+                    ", {} already cited",
+                    counted(update.omitted_entries.len(), "entry", "entries")
+                ));
+            }
+            summary.push(')');
+            output::print_step(&summary);
+            for entry in &update.merged_entries {
+                eprintln!("    merged: {}", changelog::entry_summary(entry));
+            }
+            for entry in &update.omitted_entries {
+                eprintln!("    cited:  {}", changelog::entry_summary(entry));
+            }
+        }
+        CuratedPolicy::Replace => {
+            output::print_step(&format!(
+                "{verb} curated Unreleased notes ({} replaced, changelog.curated = \"replace\")",
+                counted(
+                    update.omitted_entries.len(),
+                    "generated entry",
+                    "generated entries"
+                )
+            ));
+            for entry in &update.omitted_entries {
+                eprintln!("    replaced: {}", changelog::entry_summary(entry));
+            }
+        }
+    }
 }
 
 /// Options that control how a `ReleasePlan` is executed.
@@ -554,17 +601,22 @@ fn execute(
     let changelog_already_written = existing
         .as_deref()
         .is_some_and(|c| changelog::version_exists_in_changelog(c, &plan.target.to_string()));
-    let (full_changelog, promoted, replaced_generated_entries) = if changelog_already_written {
-        (existing.clone().unwrap_or_default(), false, 0)
+    let curated_policy = Config::load_curated_policy(&root.join("vership.toml"))?;
+    let integration = if changelog_already_written {
+        None
     } else {
-        let update =
-            changelog::integrate_changelog_checked(existing.as_deref(), &changelog_section)
-                .map_err(Error::CheckFailed)?;
-        (
-            update.content,
-            update.promoted,
-            update.replaced_generated_entries,
+        Some(
+            changelog::integrate_changelog_with_policy(
+                existing.as_deref(),
+                &changelog_section,
+                curated_policy,
+            )
+            .map_err(Error::CheckFailed)?,
         )
+    };
+    let full_changelog = match &integration {
+        Some(update) => update.content.clone(),
+        None => existing.clone().unwrap_or_default(),
     };
 
     let entry_count = commits
@@ -586,10 +638,8 @@ fn execute(
         output::print_step(&format!(
             "Changelog already up-to-date ({entry_count} entries)"
         ));
-    } else if promoted {
-        output::print_step(&format!(
-            "Promoted curated Unreleased notes ({replaced_generated_entries} generated entries replaced)"
-        ));
+    } else if let Some(update) = integration.as_ref().filter(|update| update.promoted) {
+        report_curated_promotion("Promoted", update, curated_policy);
     } else {
         output::print_step(&format!("Generated changelog ({entry_count} entries)"));
     }

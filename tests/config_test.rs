@@ -1,4 +1,5 @@
 use assert_cmd::Command as AssertCommand;
+use vership::changelog::CuratedPolicy;
 use vership::config::Config;
 
 #[test]
@@ -63,6 +64,47 @@ fn invalid_unconventional_mode_fails_closed() {
 }
 
 #[test]
+fn curated_policy_defaults_to_merge_and_reads_replace() {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert_eq!(
+        Config::load_curated_policy(&dir.path().join("missing.toml")).unwrap(),
+        CuratedPolicy::Merge
+    );
+
+    let path = dir.path().join("vership.toml");
+    std::fs::write(&path, "[changelog]\nunconventional = \"include\"\n").unwrap();
+    assert_eq!(
+        Config::load_curated_policy(&path).unwrap(),
+        CuratedPolicy::Merge,
+        "a changelog section without the key keeps the default"
+    );
+
+    std::fs::write(&path, "[changelog]\ncurated = \"replace\"\n").unwrap();
+    assert_eq!(
+        Config::load_curated_policy(&path).unwrap(),
+        CuratedPolicy::Replace
+    );
+}
+
+#[test]
+fn invalid_curated_policy_fails_closed() {
+    let error = Config::parse("[changelog]\ncurated = \"Merge\"\n")
+        .expect_err("an unknown curated policy must not silently fall back to a default");
+    assert!(
+        error
+            .to_string()
+            .contains("changelog.curated must be merge or replace; got \"Merge\""),
+        "got: {error}"
+    );
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("vership.toml");
+    std::fs::write(&path, "[changelog]\ncurated = \"keep\"\n").unwrap();
+    let error = Config::load_curated_policy(&path).expect_err("the loader rejects it too");
+    assert!(error.to_string().contains("must be merge or replace"));
+}
+
+#[test]
 fn load_missing_file_returns_default() {
     let config = Config::load_checked(std::path::Path::new("/nonexistent/vership.toml")).unwrap();
     assert_eq!(config.project.branch, "main");
@@ -96,6 +138,7 @@ fn config_show_includes_the_effective_untracked_policy_without_a_config_file() {
     assert!(text.contains("allow_untracked = false"), "got:\n{text}");
     let reparsed: toml::Value = toml::from_str(&text).expect("text output must be valid TOML");
     assert_eq!(reparsed["checks"]["allow_untracked"].as_bool(), Some(false));
+    assert_eq!(reparsed["changelog"]["curated"].as_str(), Some("merge"));
 
     let json = AssertCommand::cargo_bin("vership")
         .unwrap()
@@ -108,6 +151,29 @@ fn config_show_includes_the_effective_untracked_policy_without_a_config_file() {
         .clone();
     let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
     assert_eq!(json["checks"]["allow_untracked"], false);
+    assert_eq!(json["changelog"]["curated"], "merge");
+}
+
+#[test]
+fn config_show_reports_a_configured_curated_policy() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("vership.toml"),
+        "[changelog]\ncurated = \"replace\"\n",
+    )
+    .unwrap();
+
+    let json = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["config", "show", "--output", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(json["changelog"]["curated"], "replace");
 }
 
 #[test]

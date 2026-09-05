@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **changelog**: rewrite reference-style version headings and links to inline links before their `[x.y.z]:` definitions are stripped
+
 ## [0.5.21](https://github.com/rvben/vership/compare/v0.5.20...v0.5.21) - 2026-09-01
 
 ### Added

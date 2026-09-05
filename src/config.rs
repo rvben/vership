@@ -2,6 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::changelog::CuratedPolicy;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -136,6 +137,31 @@ struct SafetyChecks {
     allow_untracked: bool,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CuratedConfig {
+    changelog: CuratedChangelog,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CuratedChangelog {
+    curated: Option<String>,
+}
+
+fn parse_curated_policy(content: &str) -> Result<CuratedPolicy> {
+    let config: CuratedConfig =
+        toml::from_str(content).map_err(|e| Error::Config(format!("parse vership.toml: {e}")))?;
+    match config.changelog.curated.as_deref() {
+        None => Ok(CuratedPolicy::default()),
+        Some(value) => CuratedPolicy::parse(value).ok_or_else(|| {
+            Error::Config(format!(
+                "changelog.curated must be merge or replace; got {value:?}"
+            ))
+        }),
+    }
+}
+
 impl Config {
     pub fn parse(content: &str) -> Result<Self> {
         if content.trim().is_empty() {
@@ -145,11 +171,25 @@ impl Config {
             .map_err(|e| Error::Config(format!("parse vership.toml: {e}")))?;
         let _: SafetyConfig = toml::from_str(content)
             .map_err(|e| Error::Config(format!("parse vership.toml: {e}")))?;
+        parse_curated_policy(content)?;
         match config.changelog.unconventional.as_str() {
             "exclude" | "include" | "strict" => Ok(config),
             value => Err(Error::Config(format!(
                 "changelog.unconventional must be exclude, include, or strict; got {value:?}"
             ))),
+        }
+    }
+
+    /// Read how curated `## [Unreleased]` notes combine with generated entries
+    /// (`changelog.curated`), without expanding the stable public
+    /// `ChangelogConfig` shape. A missing file or key means merge.
+    pub fn load_curated_policy(path: &Path) -> Result<CuratedPolicy> {
+        match std::fs::read_to_string(path) {
+            Ok(content) => parse_curated_policy(&content),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(CuratedPolicy::default())
+            }
+            Err(error) => Err(Error::Io(error)),
         }
     }
 
@@ -190,37 +230,51 @@ pub fn show(output: &crate::output::OutputConfig) -> Result<()> {
     let path = Path::new("vership.toml");
     let config = Config::load_checked(path)?;
     let allow_untracked = Config::load_allow_untracked(path)?;
+    let curated = Config::load_curated_policy(path)?;
     if output.is_json() {
         let mut value = serde_json::to_value(&config).map_err(|e| Error::Config(e.to_string()))?;
-        let checks = value
+        let root = value
             .as_object_mut()
-            .ok_or_else(|| Error::Config("serialized config is not an object".to_string()))?
-            .entry("checks")
-            .or_insert_with(|| serde_json::json!({}));
-        checks
+            .ok_or_else(|| Error::Config("serialized config is not an object".to_string()))?;
+        root.entry("checks")
+            .or_insert_with(|| serde_json::json!({}))
             .as_object_mut()
             .ok_or_else(|| Error::Config("serialized checks config is not an object".to_string()))?
             .insert(
                 "allow_untracked".to_string(),
                 serde_json::json!(allow_untracked),
             );
+        root.entry("changelog")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| {
+                Error::Config("serialized changelog config is not an object".to_string())
+            })?
+            .insert("curated".to_string(), serde_json::json!(curated.as_str()));
         println!(
             "{}",
             serde_json::to_string_pretty(&value).map_err(|e| Error::Config(e.to_string()))?
         );
     } else {
         let mut value = toml::Value::try_from(&config).map_err(|e| Error::Config(e.to_string()))?;
-        let checks = value
+        let root = value
             .as_table_mut()
-            .ok_or_else(|| Error::Config("serialized config is not a table".to_string()))?
-            .entry("checks")
-            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-        checks
+            .ok_or_else(|| Error::Config("serialized config is not a table".to_string()))?;
+        root.entry("checks")
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
             .as_table_mut()
             .ok_or_else(|| Error::Config("serialized checks config is not a table".to_string()))?
             .insert(
                 "allow_untracked".to_string(),
                 toml::Value::Boolean(allow_untracked),
+            );
+        root.entry("changelog")
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+            .as_table_mut()
+            .ok_or_else(|| Error::Config("serialized changelog config is not a table".to_string()))?
+            .insert(
+                "curated".to_string(),
+                toml::Value::String(curated.as_str().to_string()),
             );
         print!(
             "{}",
@@ -247,6 +301,8 @@ pub fn init() -> Result<()> {
 # [changelog]
 # unconventional = "exclude"   # "exclude", "include", or "strict"
 # exclude_types = []           # Additional commit types to exclude
+# curated = "merge"            # Curated [Unreleased] notes: "merge" adds the generated
+#                              # entries they do not cite; "replace" drops every generated entry
 
 # [hooks]
 # pre-bump = ""

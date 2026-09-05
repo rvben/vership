@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use chrono::Local;
-use regex::Regex;
+use regex::{Captures, Regex};
 
 use crate::git::Commit;
 
@@ -364,36 +365,87 @@ pub struct ChangelogUpdate {
     pub promoted: bool,
 }
 
+/// How curated `## [Unreleased]` notes combine with the entries generated from
+/// commits when a release is promoted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CuratedPolicy {
+    /// Keep the curated notes and add every generated entry they do not cover.
+    /// A note covers a commit by citing its hash, so a hand-written entry that
+    /// names its commit stands in for the generated one.
+    #[default]
+    Merge,
+    /// The curated notes are the whole release: every generated entry is
+    /// dropped and reported.
+    Replace,
+}
+
+impl CuratedPolicy {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "merge" => Some(Self::Merge),
+            "replace" => Some(Self::Replace),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Replace => "replace",
+        }
+    }
+}
+
 /// Detailed result returned by the checked integration path.
 #[derive(Debug)]
 pub struct ChangelogIntegration {
     pub content: String,
     pub promoted: bool,
-    /// Number of generated commit entries omitted because curated notes are
-    /// authoritative. Callers surface this so replacement is never silent.
+    /// Number of generated commit entries left out because curated notes are
+    /// authoritative for them. Callers surface this so replacement is never
+    /// silent. Equal to `omitted_entries.len()`.
     pub replaced_generated_entries: usize,
+    /// Generated entries added alongside the curated notes, in generated
+    /// order, each without its leading `- `.
+    pub merged_entries: Vec<String>,
+    /// Generated entries left out: every entry under the replace policy, and
+    /// the entries whose commit the curated notes cite under merge.
+    pub omitted_entries: Vec<String>,
+}
+
+/// Merge a generated release section into an existing CHANGELOG.md using the
+/// default [`CuratedPolicy::Merge`]. See [`integrate_changelog_with_policy`].
+pub fn integrate_changelog_checked(
+    existing: Option<&str>,
+    new_section: &str,
+) -> std::result::Result<ChangelogIntegration, String> {
+    integrate_changelog_with_policy(existing, new_section, CuratedPolicy::default())
 }
 
 /// Merge a generated release section into an existing CHANGELOG.md.
 ///
 /// When the file has a canonical `## [Unreleased]` heading or the common
 /// unbracketed `## Unreleased` form, that section is *promoted* into the release:
-/// its heading becomes the new version's heading, a fresh empty
-/// `## [Unreleased]` is inserted at the top, and any hand-curated entries are
-/// preserved. The generated section is only used to supply the version heading
-/// (and, when `[Unreleased]` is empty, its body).
+/// its heading becomes the new version's heading and a fresh empty
+/// `## [Unreleased]` is inserted at the top. An empty section takes the
+/// generated body. Hand-curated notes combine with the generated entries
+/// according to `policy`: merged by default, so a note written for what the
+/// commits cannot say never costs the release its other entries.
 ///
 /// When there is no `## [Unreleased]` section, the generated section is simply
 /// prepended above the most recent release (legacy behaviour).
-pub fn integrate_changelog_checked(
+pub fn integrate_changelog_with_policy(
     existing: Option<&str>,
     new_section: &str,
+    policy: CuratedPolicy,
 ) -> std::result::Result<ChangelogIntegration, String> {
     let Some(content) = existing else {
         return Ok(ChangelogIntegration {
             content: prepend_to_changelog_checked(None, new_section),
             promoted: false,
             replaced_generated_entries: 0,
+            merged_entries: Vec::new(),
+            omitted_entries: Vec::new(),
         });
     };
 
@@ -428,6 +480,8 @@ pub fn integrate_changelog_checked(
             content: prepend_to_changelog_checked(Some(content), new_section),
             promoted: false,
             replaced_generated_entries: 0,
+            merged_entries: Vec::new(),
+            omitted_entries: Vec::new(),
         });
     };
 
@@ -439,35 +493,285 @@ pub fn integrate_changelog_checked(
 
     // Split the generated section into its heading line and body.
     let new_header = new_section.lines().next().unwrap_or(new_section);
+    let generated_body = new_section.strip_prefix(new_header).unwrap_or("");
 
     let curated = !unreleased_body.trim().is_empty();
-    let replaced_generated_entries = if curated {
-        new_section
-            .lines()
-            .filter(|line| line.trim_start().starts_with("- "))
-            .count()
-    } else {
-        0
-    };
-    let promoted_section = if curated {
-        // Curated content wins; reuse only the generated heading.
-        join_blocks(&[new_header, unreleased_body])
-    } else {
+    let (promoted_section, merged_entries, omitted_entries) = if !curated {
         // Nothing curated: fill the promoted slot with the generated section.
-        new_section.to_string()
+        (new_section.to_string(), Vec::new(), Vec::new())
+    } else {
+        match policy {
+            // Curated content is the whole release; reuse only the generated heading.
+            CuratedPolicy::Replace => (
+                join_blocks(&[new_header, unreleased_body]),
+                Vec::new(),
+                generated_entries(generated_body),
+            ),
+            CuratedPolicy::Merge => {
+                let merge = merge_generated_entries(unreleased_body, generated_body);
+                (
+                    join_blocks(&[new_header, &merge.body]),
+                    merge.merged,
+                    merge.omitted,
+                )
+            }
+        }
     };
 
     let result = join_blocks(&[preamble, "## [Unreleased]", &promoted_section, rest]);
     // vership emits self-contained inline-linked version headers, so any bottom
-    // `[Unreleased]:` / `[x.y.z]:` link-reference definitions are redundant and
-    // drift out of date on every promotion. Strip them, leaving a clean trailing
-    // newline. Non-version link-reference definitions are preserved.
-    let result = strip_version_link_refs_checked(&result);
+    // `[Unreleased]:` / `[x.y.z]:` link-reference definitions would only drift
+    // out of date on every promotion. Every reference that used one is
+    // rewritten to an inline link first, then the definitions are stripped,
+    // leaving a clean trailing newline. Non-version definitions are preserved.
+    let result = inline_version_link_refs(&result);
     Ok(ChangelogIntegration {
         content: result,
         promoted: curated,
-        replaced_generated_entries,
+        replaced_generated_entries: omitted_entries.len(),
+        merged_entries,
+        omitted_entries,
     })
+}
+
+/// A `### ` section of a generated release body, or the entries that precede
+/// any heading.
+struct GeneratedSection {
+    name: Option<String>,
+    entries: Vec<String>,
+}
+
+/// Parse the body of a generated release section (everything below its version
+/// heading) into its `### ` sections and their `- ` entries. Entries are stored
+/// without the list marker; an indented continuation line stays with its entry.
+fn parse_generated_sections(body: &str) -> Vec<GeneratedSection> {
+    let mut sections: Vec<GeneratedSection> = Vec::new();
+    for line in body.lines() {
+        if let Some(name) = h3_name(line) {
+            sections.push(GeneratedSection {
+                name: Some(name),
+                entries: Vec::new(),
+            });
+        } else if let Some(entry) = line.strip_prefix("- ") {
+            if sections.is_empty() {
+                sections.push(GeneratedSection {
+                    name: None,
+                    entries: Vec::new(),
+                });
+            }
+            sections
+                .last_mut()
+                .expect("a section was just pushed")
+                .entries
+                .push(entry.to_string());
+        } else if !line.trim().is_empty()
+            && let Some(section) = sections.last_mut()
+            && let Some(entry) = section.entries.last_mut()
+        {
+            entry.push('\n');
+            entry.push_str(line);
+        }
+    }
+    sections
+}
+
+/// Every `- ` entry of a generated release body, in order, without markers.
+fn generated_entries(body: &str) -> Vec<String> {
+    parse_generated_sections(body)
+        .into_iter()
+        .flat_map(|section| section.entries)
+        .collect()
+}
+
+/// The text of an ATX level-3 heading line, without its marker and any closing
+/// `#` run. `None` for any other line, including deeper headings.
+fn h3_name(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("###")?;
+    if !rest.starts_with([' ', '\t']) {
+        return None;
+    }
+    let name = rest.trim().trim_end_matches('#').trim_end();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+fn is_list_item(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
+        return true;
+    }
+    let digits = trimmed.trim_start_matches(|character: char| character.is_ascii_digit());
+    digits.len() < trimmed.len() && (digits.starts_with(". ") || digits.starts_with(") "))
+}
+
+/// Hex tokens of commit-hash length in the curated notes, outside fenced code.
+/// A generated entry whose commit starts with one of them is already covered.
+fn cited_commit_hashes(curated: &str) -> Vec<String> {
+    static HEX_TOKEN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\b[0-9a-fA-F]{7,40}\b").expect("valid regex"));
+    let mut fence = None;
+    let mut tokens = Vec::new();
+    for line in curated.lines() {
+        if scan_fence_line(line, &mut fence) {
+            continue;
+        }
+        tokens.extend(
+            HEX_TOKEN
+                .find_iter(line)
+                .map(|token| token.as_str().to_ascii_lowercase()),
+        );
+    }
+    tokens
+}
+
+/// The commit hash a generated entry links to, lowercase. The full hash from
+/// the commit URL when there is one, else the short hash of the link text.
+fn entry_commit_hash(entry: &str) -> Option<String> {
+    static COMMIT_URL: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"/commit/([0-9a-fA-F]{7,40})").expect("valid regex"));
+    static SHORT_LINK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\(\[([0-9a-fA-F]{7,40})\]\(").expect("valid regex"));
+    COMMIT_URL
+        .captures(entry)
+        .or_else(|| SHORT_LINK.captures(entry))
+        .map(|captures| captures[1].to_ascii_lowercase())
+}
+
+fn is_cited(entry: &str, cited: &[String]) -> bool {
+    entry_commit_hash(entry).is_some_and(|hash| {
+        cited
+            .iter()
+            .any(|token| hash.starts_with(token.as_str()) || token.starts_with(&hash))
+    })
+}
+
+/// Render a generated entry for a terminal report: the trailing
+/// `([abc1234](https://.../commit/...))` link becomes `(abc1234)`.
+pub fn entry_summary(entry: &str) -> String {
+    static COMMIT_LINK: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\s*\(\[([0-9a-fA-F]{7,40})\]\([^)]*\)\)\s*$").expect("valid regex")
+    });
+    COMMIT_LINK.replace(entry, " ($1)").into_owned()
+}
+
+struct MergeOutcome {
+    body: String,
+    merged: Vec<String>,
+    omitted: Vec<String>,
+}
+
+/// Add the generated entries the curated notes do not cover. Each generated
+/// `### ` section lands at the end of the curated section of the same name,
+/// tight against a closing list or after a blank line otherwise; a section the
+/// notes lack is appended in generated order; entries under no heading go
+/// before the first curated heading. Curated text is never reordered.
+fn merge_generated_entries(curated: &str, generated: &str) -> MergeOutcome {
+    let cited = cited_commit_hashes(curated);
+    // The blank lines around the body belong to the heading that carried it;
+    // `join_blocks` restores exactly one on each side.
+    let mut lines: Vec<String> = curated
+        .lines()
+        .skip_while(|line| line.trim().is_empty())
+        .map(str::to_string)
+        .collect();
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+
+    let mut fence = None;
+    let mut headings: Vec<(usize, String)> = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if scan_fence_line(line, &mut fence) {
+            continue;
+        }
+        if let Some(name) = h3_name(line) {
+            headings.push((index, name));
+        }
+    }
+
+    let mut merged = Vec::new();
+    let mut omitted = Vec::new();
+    let mut insertions: Vec<(usize, Vec<String>)> = Vec::new();
+    let mut tail: Vec<String> = Vec::new();
+    for section in parse_generated_sections(generated) {
+        let mut entries = Vec::new();
+        for entry in section.entries {
+            if is_cited(&entry, &cited) {
+                omitted.push(entry);
+            } else {
+                entries.push(entry);
+            }
+        }
+        if entries.is_empty() {
+            continue;
+        }
+        let bullets = entries.iter().map(|entry| format!("- {entry}"));
+
+        // The span of curated lines this section extends, if any.
+        let target = match &section.name {
+            Some(name) => headings
+                .iter()
+                .position(|(_, heading)| heading.eq_ignore_ascii_case(name))
+                .map(|position| {
+                    let start = headings[position].0 + 1;
+                    let end = headings
+                        .get(position + 1)
+                        .map_or(lines.len(), |(index, _)| *index);
+                    (start, end)
+                }),
+            None => Some((0, headings.first().map_or(lines.len(), |(index, _)| *index))),
+        };
+        match target {
+            Some((start, end)) => {
+                let last_content = (start..end)
+                    .rev()
+                    .find(|index| !lines[*index].trim().is_empty());
+                let mut block = Vec::new();
+                let at = match last_content {
+                    Some(index) => {
+                        if !is_list_item(&lines[index]) {
+                            block.push(String::new());
+                        }
+                        index + 1
+                    }
+                    None => {
+                        if start > 0 {
+                            block.push(String::new());
+                        }
+                        start
+                    }
+                };
+                block.extend(bullets);
+                if at < lines.len() && !lines[at].trim().is_empty() {
+                    block.push(String::new());
+                }
+                insertions.push((at, block));
+            }
+            None => {
+                if !lines.is_empty() || !tail.is_empty() {
+                    tail.push(String::new());
+                }
+                tail.push(format!(
+                    "### {}",
+                    section.name.as_deref().unwrap_or_default()
+                ));
+                tail.push(String::new());
+                tail.extend(bullets);
+            }
+        }
+        merged.extend(entries);
+    }
+
+    // Splice from the bottom up so earlier insertion points stay valid.
+    insertions.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    for (at, block) in insertions {
+        lines.splice(at..at, block);
+    }
+    lines.extend(tail);
+    MergeOutcome {
+        body: lines.join("\n"),
+        merged,
+        omitted,
+    }
 }
 
 fn is_in_markdown_fence(content: &str, offset: usize) -> bool {
@@ -513,7 +817,7 @@ pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> Changel
     } else {
         new_section.to_string()
     };
-    let content = strip_version_link_refs(&join_blocks(&[
+    let content = inline_version_link_refs(&join_blocks(&[
         preamble,
         "## [Unreleased]",
         &promoted_section,
@@ -522,36 +826,164 @@ pub fn integrate_changelog(existing: Option<&str>, new_section: &str) -> Changel
     ChangelogUpdate { content, promoted }
 }
 
-/// Remove changelog version link-reference definitions: the bottom
-/// `[Unreleased]: <url>` and `[x.y.z]: <url>` lines. A version label is
-/// `Unreleased` or a `MAJOR.MINOR(.PATCH)` number with an optional `v` prefix
-/// and optional pre-release/build suffix. Labels without that shape are kept,
-/// so prose references such as `[contributing]:` and numeric footnote/issue
-/// refs such as `[1]:` survive. Collapses any blank lines left behind into a
-/// single trailing newline.
-fn strip_version_link_refs(content: &str) -> String {
-    let ref_re = Regex::new(
-        r"^\[(?:Unreleased|v?\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\]:\s+\S",
-    )
-    .expect("valid regex");
-    let kept: Vec<&str> = content
-        .lines()
-        .filter(|line| !ref_re.is_match(line))
-        .collect();
+/// Remove changelog version link-reference definitions, the bottom
+/// `[Unreleased]: <url>` and `[x.y.z]: <url>` lines, without breaking a link
+/// that used them: every reference-style link to a version label (a
+/// `## [1.2.0] - date` heading, `see [1.2.0]`, `[1.2.0][]`, `[text][1.2.0]`)
+/// is rewritten to an inline link first, so the document renders exactly as it
+/// did.
+///
+/// A version label is `Unreleased` or a `MAJOR.MINOR(.PATCH)` number with an
+/// optional `v` prefix and optional pre-release/build suffix. Labels without
+/// that shape are kept, so prose references such as `[contributing]:` and
+/// numeric footnote/issue refs such as `[1]:` survive. Definitions and
+/// references inside fenced code are content and stay as written. The
+/// `[Unreleased]` definition is only stripped: its compare range is stale by
+/// construction and the heading is regenerated bare. Collapses any blank lines
+/// left behind into a single trailing newline.
+fn inline_version_link_refs(content: &str) -> String {
+    static DEFINITION: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"^ {0,3}\[((?i:unreleased)|v?\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\]:\s+(<[^>]*>|\S+)",
+        )
+        .expect("valid regex")
+    });
+    let lines: Vec<&str> = content.lines().collect();
+    let mut is_definition = vec![false; lines.len()];
+    let mut definitions: Vec<(String, String)> = Vec::new();
+    let mut fence = None;
+    for (index, line) in lines.iter().enumerate() {
+        if scan_fence_line(line, &mut fence) {
+            continue;
+        }
+        let Some(captures) = DEFINITION.captures(line) else {
+            continue;
+        };
+        is_definition[index] = true;
+        let label = &captures[1];
+        // CommonMark resolves a label to its first definition.
+        if label.eq_ignore_ascii_case("unreleased")
+            || definitions
+                .iter()
+                .any(|(known, _)| known.eq_ignore_ascii_case(label))
+        {
+            continue;
+        }
+        let url = captures[2].trim_start_matches('<').trim_end_matches('>');
+        definitions.push((label.to_string(), url.to_string()));
+    }
+
+    let mut fence = None;
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    for (index, line) in lines.iter().enumerate() {
+        if scan_fence_line(line, &mut fence) {
+            kept.push((*line).to_string());
+        } else if !is_definition[index] {
+            kept.push(inline_reference_links(line, &definitions));
+        }
+    }
     format!("{}\n", kept.join("\n").trim_end())
 }
 
-fn strip_version_link_refs_checked(content: &str) -> String {
-    let ref_re = Regex::new(
-        r"^\[(?:Unreleased|v?\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\]:\s+\S",
-    )
-    .expect("valid regex");
-    let mut fence = None;
-    let kept: Vec<&str> = content
-        .lines()
-        .filter(|line| scan_fence_line(line, &mut fence) || !ref_re.is_match(line))
-        .collect();
-    format!("{}\n", kept.join("\n").trim_end())
+/// Rewrite the reference-style links on one line that resolve through
+/// `definitions` into inline links. Code spans are left as written.
+fn inline_reference_links(line: &str, definitions: &[(String, String)]) -> String {
+    if definitions.is_empty() || !line.contains('[') {
+        return line.to_string();
+    }
+    let mut out = String::with_capacity(line.len());
+    for (segment, is_code) in code_span_segments(line) {
+        if is_code {
+            out.push_str(segment);
+        } else {
+            out.push_str(&rewrite_reference_links(segment, definitions));
+        }
+    }
+    out
+}
+
+/// Split a line into text and code-span segments. A backtick run opens a code
+/// span only when a run of exactly the same length closes it later on the
+/// line; an unmatched run is text.
+fn code_span_segments(line: &str) -> Vec<(&str, bool)> {
+    let bytes = line.as_bytes();
+    let mut segments = Vec::new();
+    let mut text_start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'`' {
+            index += 1;
+            continue;
+        }
+        let run_start = index;
+        while index < bytes.len() && bytes[index] == b'`' {
+            index += 1;
+        }
+        let run_length = index - run_start;
+        let mut cursor = index;
+        let mut close = None;
+        while cursor < bytes.len() {
+            if bytes[cursor] != b'`' {
+                cursor += 1;
+                continue;
+            }
+            let close_start = cursor;
+            while cursor < bytes.len() && bytes[cursor] == b'`' {
+                cursor += 1;
+            }
+            if cursor - close_start == run_length {
+                close = Some(cursor);
+                break;
+            }
+        }
+        if let Some(close_end) = close {
+            if run_start > text_start {
+                segments.push((&line[text_start..run_start], false));
+            }
+            segments.push((&line[run_start..close_end], true));
+            text_start = close_end;
+            index = close_end;
+        }
+    }
+    if text_start < bytes.len() {
+        segments.push((&line[text_start..], false));
+    }
+    segments
+}
+
+fn rewrite_reference_links(text: &str, definitions: &[(String, String)]) -> String {
+    // A bracketed span, then optionally a second bracket pair (full or
+    // collapsed reference) or the `(` that marks an inline link.
+    static REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(!?)\[([^\[\]]+)\](\[([^\[\]]*)\]|\()?").expect("valid regex")
+    });
+    let lookup = |label: &str| {
+        definitions
+            .iter()
+            .find(|(known, _)| known.eq_ignore_ascii_case(label))
+            .map(|(_, url)| url.as_str())
+    };
+    REFERENCE
+        .replace_all(text, |captures: &Captures| {
+            let whole = captures[0].to_string();
+            if !captures[1].is_empty() {
+                return whole;
+            }
+            let link_text = &captures[2];
+            let label = match captures.get(3).map(|m| m.as_str()) {
+                Some("(") => return whole,
+                Some(_) => match captures.get(4).map(|m| m.as_str()) {
+                    Some(label) if !label.is_empty() => label,
+                    _ => link_text,
+                },
+                None => link_text,
+            };
+            match lookup(label) {
+                Some(url) => format!("[{link_text}]({url})"),
+                None => whole,
+            }
+        })
+        .into_owned()
 }
 
 /// Extract the changelog section for `version` from a full document: from its
