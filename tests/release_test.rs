@@ -402,6 +402,83 @@ fn bump_omits_the_generated_entry_a_curated_note_cites_and_reports_it() {
     );
 }
 
+/// A commit that carries its own Unreleased note cannot cite its own hash, so
+/// the note must count as coverage on its own: the release lists the change
+/// once, the commit without a note still merges, and both the preview and the
+/// bump agree. No remote is configured, so hash citation cannot be what keeps
+/// the duplicate out.
+#[test]
+fn bump_omits_the_generated_entry_whose_own_commit_wrote_its_note() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_gradle_release(
+        root,
+        "# Changelog\n\n## [Unreleased]\n\n## [0.1.5] - 2026-05-01\n",
+    );
+    fs::write(root.join("source.txt"), "flag").unwrap();
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- **cli**: the flag, explained by hand\n\n## [0.1.5] - 2026-05-01\n",
+    )
+    .unwrap();
+    git(root, &["add", "source.txt", "CHANGELOG.md"]);
+    git(root, &["commit", "-m", "feat(cli): add the flag"]);
+
+    let preview = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["changelog", "patch"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let previewed = String::from_utf8_lossy(&preview.stdout).to_string();
+
+    let output = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["bump", "patch", "--skip-checks", "--no-push"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "Promoted curated Unreleased notes (1 generated entry merged, 1 entry noted by its own commit)"
+        ),
+        "got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("merged: release fix"),
+        "the commit without a note is listed as merged, got stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("noted:  **cli**: add the flag"),
+        "the commit that wrote its note is listed as noted, got stderr:\n{stderr}"
+    );
+
+    let written = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+    let released = vership::changelog::extract_section(&written, "0.1.6").unwrap();
+    assert_eq!(
+        previewed.trim(),
+        released.trim(),
+        "the preview shows the section the bump releases"
+    );
+    assert!(
+        released.contains(
+            "### Added\n\n- **cli**: the flag, explained by hand\n\n### Fixed\n\n- release fix"
+        ),
+        "the hand-written note stands alone under Added and the unnoted commit follows, got:\n{released}"
+    );
+    assert_eq!(
+        released.matches("add the flag").count(),
+        0,
+        "the generated entry for the noted commit stays out, got:\n{released}"
+    );
+}
+
 #[test]
 fn bump_with_an_invalid_curated_policy_fails_closed() {
     let dir = TempDir::new().unwrap();

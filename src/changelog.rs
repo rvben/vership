@@ -154,6 +154,44 @@ fn format_entry(cc: &ConventionalCommit, commit: &Commit, remote_url: Option<&st
     format!("{scope_prefix}{}{hash_suffix}", cc.description)
 }
 
+/// Render a non-conventional commit for the `### Other` section.
+fn format_other_entry(commit: &Commit, remote_url: Option<&str>) -> String {
+    match remote_url {
+        Some(url) => {
+            let short_hash = &commit.hash[..7.min(commit.hash.len())];
+            format!(
+                "{} ([{short_hash}]({url}/commit/{}))",
+                commit.subject(),
+                commit.hash
+            )
+        }
+        None => commit.subject().to_string(),
+    }
+}
+
+/// The entries `generate_changelog_with_mode` would render for `commits`,
+/// byte for byte and in commit order, without their list markers. Commits
+/// that produce no entry (merges, excluded types, non-conventional subjects
+/// outside `include` mode) are skipped. Callers use this to name the
+/// generated entries that curated notes already cover.
+pub fn generated_entries_for(
+    commits: &[Commit],
+    remote_url: Option<&str>,
+    unconventional_mode: &str,
+) -> Vec<String> {
+    commits
+        .iter()
+        .filter(|commit| !commit.message.starts_with("Merge "))
+        .filter_map(|commit| match parse_conventional_commit(&commit.message) {
+            Some(cc) => (cc.breaking || type_to_section(&cc.commit_type).is_some())
+                .then(|| format_entry(&cc, commit, remote_url)),
+            None => {
+                (unconventional_mode == "include").then(|| format_other_entry(commit, remote_url))
+            }
+        })
+        .collect()
+}
+
 /// Generate changelog with unconventional commit handling mode.
 ///
 /// - "exclude" (default): silently skip non-conventional commits
@@ -193,15 +231,7 @@ pub fn generate_changelog_with_mode(
         if !unconventional.is_empty() {
             output.push_str("\n### Other\n\n");
             for commit in unconventional {
-                let short_hash = &commit.hash[..7.min(commit.hash.len())];
-                match remote_url {
-                    Some(url) => output.push_str(&format!(
-                        "- {} ([{short_hash}]({url}/commit/{}))\n",
-                        commit.subject(),
-                        commit.hash
-                    )),
-                    None => output.push_str(&format!("- {}\n", commit.subject())),
-                }
+                output.push_str(&format!("- {}\n", format_other_entry(commit, remote_url)));
             }
         }
     }
@@ -370,8 +400,9 @@ pub struct ChangelogUpdate {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CuratedPolicy {
     /// Keep the curated notes and add every generated entry they do not cover.
-    /// A note covers a commit by citing its hash, so a hand-written entry that
-    /// names its commit stands in for the generated one.
+    /// A note covers a commit by citing its hash, or by having arrived in that
+    /// commit: a change that ships with its own Unreleased entry stands in for
+    /// the generated one.
     #[default]
     Merge,
     /// The curated notes are the whole release: every generated entry is
@@ -409,8 +440,15 @@ pub struct ChangelogIntegration {
     /// order, each without its leading `- `.
     pub merged_entries: Vec<String>,
     /// Generated entries left out: every entry under the replace policy, and
-    /// the entries whose commit the curated notes cite under merge.
+    /// under merge the union of `cited_entries` and `noted_entries`, in
+    /// generated order.
     pub omitted_entries: Vec<String>,
+    /// Generated entries left out under merge because the curated notes cite
+    /// their commit hash.
+    pub cited_entries: Vec<String>,
+    /// Generated entries left out under merge because their own commit added
+    /// the curated note that describes them.
+    pub noted_entries: Vec<String>,
 }
 
 /// Merge a generated release section into an existing CHANGELOG.md using the
@@ -434,10 +472,28 @@ pub fn integrate_changelog_checked(
 ///
 /// When there is no `## [Unreleased]` section, the generated section is simply
 /// prepended above the most recent release (legacy behaviour).
+///
+/// Coverage here is judged from the notes alone (a cited commit hash); see
+/// [`integrate_changelog_with_coverage`] to also name the entries whose own
+/// commit wrote its note.
 pub fn integrate_changelog_with_policy(
     existing: Option<&str>,
     new_section: &str,
     policy: CuratedPolicy,
+) -> std::result::Result<ChangelogIntegration, String> {
+    integrate_changelog_with_coverage(existing, new_section, policy, &[])
+}
+
+/// [`integrate_changelog_with_policy`] with the generated entries that are
+/// already covered because their own commit added a curated note under
+/// `## [Unreleased]`. `noted` holds those entries exactly as the generated
+/// section renders them (see [`generated_entries_for`]); under the merge
+/// policy they are left out and reported instead of listed twice.
+pub fn integrate_changelog_with_coverage(
+    existing: Option<&str>,
+    new_section: &str,
+    policy: CuratedPolicy,
+    noted: &[String],
 ) -> std::result::Result<ChangelogIntegration, String> {
     let Some(content) = existing else {
         return Ok(ChangelogIntegration {
@@ -446,6 +502,8 @@ pub fn integrate_changelog_with_policy(
             replaced_generated_entries: 0,
             merged_entries: Vec::new(),
             omitted_entries: Vec::new(),
+            cited_entries: Vec::new(),
+            noted_entries: Vec::new(),
         });
     };
 
@@ -482,6 +540,8 @@ pub fn integrate_changelog_with_policy(
             replaced_generated_entries: 0,
             merged_entries: Vec::new(),
             omitted_entries: Vec::new(),
+            cited_entries: Vec::new(),
+            noted_entries: Vec::new(),
         });
     };
 
@@ -496,27 +556,38 @@ pub fn integrate_changelog_with_policy(
     let generated_body = new_section.strip_prefix(new_header).unwrap_or("");
 
     let curated = !unreleased_body.trim().is_empty();
-    let (promoted_section, merged_entries, omitted_entries) = if !curated {
-        // Nothing curated: fill the promoted slot with the generated section.
-        (new_section.to_string(), Vec::new(), Vec::new())
-    } else {
-        match policy {
-            // Curated content is the whole release; reuse only the generated heading.
-            CuratedPolicy::Replace => (
-                join_blocks(&[new_header, unreleased_body]),
+    let (promoted_section, merged_entries, omitted_entries, cited_entries, noted_entries) =
+        if !curated {
+            // Nothing curated: fill the promoted slot with the generated section.
+            (
+                new_section.to_string(),
                 Vec::new(),
-                generated_entries(generated_body),
-            ),
-            CuratedPolicy::Merge => {
-                let merge = merge_generated_entries(unreleased_body, generated_body);
-                (
-                    join_blocks(&[new_header, &merge.body]),
-                    merge.merged,
-                    merge.omitted,
-                )
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        } else {
+            match policy {
+                // Curated content is the whole release; reuse only the generated heading.
+                CuratedPolicy::Replace => (
+                    join_blocks(&[new_header, unreleased_body]),
+                    Vec::new(),
+                    generated_entries(generated_body),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+                CuratedPolicy::Merge => {
+                    let merge = merge_generated_entries(unreleased_body, generated_body, noted);
+                    (
+                        join_blocks(&[new_header, &merge.body]),
+                        merge.merged,
+                        merge.omitted,
+                        merge.cited,
+                        merge.noted,
+                    )
+                }
             }
-        }
-    };
+        };
 
     let result = join_blocks(&[preamble, "## [Unreleased]", &promoted_section, rest]);
     // vership emits self-contained inline-linked version headers, so any bottom
@@ -531,7 +602,41 @@ pub fn integrate_changelog_with_policy(
         replaced_generated_entries: omitted_entries.len(),
         merged_entries,
         omitted_entries,
+        cited_entries,
+        noted_entries,
     })
+}
+
+/// The list entries under the first supported `## [Unreleased]` (or
+/// `## Unreleased`) heading of a changelog, trimmed and without their
+/// markers, skipping fenced code. Empty when the file has no such section.
+/// This is a coverage probe, so a malformed heading yields nothing instead
+/// of an error; the release path validates the heading separately.
+pub fn unreleased_entries(content: &str) -> Vec<String> {
+    static UNRELEASED: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?im)^##[ \t]+(?:\[unreleased\](?:\([^)]+\))?|unreleased)[ \t]*\r?$")
+            .expect("valid regex")
+    });
+    let Some(heading) = UNRELEASED
+        .find_iter(content)
+        .find(|candidate| !is_in_markdown_fence(content, candidate.start()))
+    else {
+        return Vec::new();
+    };
+    let end = find_h2_outside_fences(content, heading.end()).unwrap_or(content.len());
+    let mut fence = None;
+    content[heading.end()..end]
+        .lines()
+        .filter(|line| !scan_fence_line(line, &mut fence))
+        .filter(|line| is_list_item(line))
+        .map(|line| {
+            let trimmed = line.trim_start();
+            trimmed
+                .find(' ')
+                .map_or(trimmed, |at| trimmed[at + 1..].trim())
+                .to_string()
+        })
+        .collect()
 }
 
 /// A `### ` section of a generated release body, or the entries that precede
@@ -656,15 +761,20 @@ pub fn entry_summary(entry: &str) -> String {
 struct MergeOutcome {
     body: String,
     merged: Vec<String>,
+    /// `cited` followed by `noted`, in generated order.
     omitted: Vec<String>,
+    cited: Vec<String>,
+    noted: Vec<String>,
 }
 
-/// Add the generated entries the curated notes do not cover. Each generated
+/// Add the generated entries the curated notes do not cover: an entry is
+/// covered when the notes cite its commit hash or when it is listed in
+/// `noted`, the entries whose own commit wrote a curated note. Each generated
 /// `### ` section lands at the end of the curated section of the same name,
 /// tight against a closing list or after a blank line otherwise; a section the
 /// notes lack is appended in generated order; entries under no heading go
 /// before the first curated heading. Curated text is never reordered.
-fn merge_generated_entries(curated: &str, generated: &str) -> MergeOutcome {
+fn merge_generated_entries(curated: &str, generated: &str, noted: &[String]) -> MergeOutcome {
     let cited = cited_commit_hashes(curated);
     // The blank lines around the body belong to the heading that carried it;
     // `join_blocks` restores exactly one on each side.
@@ -690,12 +800,18 @@ fn merge_generated_entries(curated: &str, generated: &str) -> MergeOutcome {
 
     let mut merged = Vec::new();
     let mut omitted = Vec::new();
+    let mut cited_out = Vec::new();
+    let mut noted_out = Vec::new();
     let mut insertions: Vec<(usize, Vec<String>)> = Vec::new();
     let mut tail: Vec<String> = Vec::new();
     for section in parse_generated_sections(generated) {
         let mut entries = Vec::new();
         for entry in section.entries {
             if is_cited(&entry, &cited) {
+                cited_out.push(entry.clone());
+                omitted.push(entry);
+            } else if noted.contains(&entry) {
+                noted_out.push(entry.clone());
                 omitted.push(entry);
             } else {
                 entries.push(entry);
@@ -771,6 +887,8 @@ fn merge_generated_entries(curated: &str, generated: &str) -> MergeOutcome {
         body: lines.join("\n"),
         merged,
         omitted,
+        cited: cited_out,
+        noted: noted_out,
     }
 }
 

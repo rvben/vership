@@ -231,9 +231,12 @@ When the Unreleased section contains curated content, the release keeps those
 notes and merges in the generated entries they do not cover. A generated entry
 joins the end of the curated section of the same name (`### Fixed` under
 `### Fixed`), sections the notes lack are appended in the generated order, and
-an entry is left out only when the notes cite its commit hash (`fixed the
-parser (abc1234)`), so a hand-written description can stand in for the
-generated line. Vership lists every merged and cited entry on stderr, and both
+an entry is left out when the notes already cover it, so a hand-written
+description stands in for the generated line. A note covers a commit in either
+of two ways: the commit itself added the note under `## [Unreleased]` (the
+usual case, a change that ships with its own release note), or the note cites
+the commit's hash (`fixed the parser (abc1234)`, for a note written in a later
+commit). Vership lists every merged, noted and cited entry on stderr, and both
 `vership changelog <level>` and `vership bump <level> --dry-run` show the exact
 section that would be released.
 

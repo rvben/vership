@@ -1,7 +1,8 @@
 use vership::changelog::{
     ConventionalCommit, CuratedPolicy, entry_summary, extract_section, generate_changelog,
-    generate_changelog_with_mode, integrate_changelog_checked, integrate_changelog_with_policy,
-    parse_conventional_commit, version_exists_in_changelog,
+    generate_changelog_with_mode, generated_entries_for, integrate_changelog_checked,
+    integrate_changelog_with_coverage, integrate_changelog_with_policy, parse_conventional_commit,
+    unreleased_entries, version_exists_in_changelog,
 };
 use vership::git::Commit;
 
@@ -1222,6 +1223,194 @@ fn prepend_puts_the_new_release_above_a_changelog_that_opens_with_a_heading() {
         !result.content.starts_with('\n'),
         "no leading blank line when there is no preamble, got:\n{}",
         result.content
+    );
+}
+
+/// A commit that ships with its own Unreleased note cannot cite its own hash,
+/// so its generated entry must be recognised by content: the caller names it
+/// as noted and the merge leaves it out, reporting it apart from cited ones.
+#[test]
+fn merge_omits_a_generated_entry_whose_own_commit_wrote_the_note() {
+    let existing = "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- the parser, explained by hand\n\n## [0.1.0] - 2026-01-01\n";
+    let generated = "## [0.1.1] - 2026-06-01\n\n### Fixed\n\n- **parser**: reject a dangling escape\n- keep the cursor on the same line\n\n### Added\n\n- a flag\n";
+    let noted = vec!["**parser**: reject a dangling escape".to_string()];
+
+    let result =
+        integrate_changelog_with_coverage(Some(existing), generated, CuratedPolicy::Merge, &noted)
+            .unwrap();
+
+    let released = extract_section(&result.content, "0.1.1").unwrap();
+    assert!(
+        !released.contains("reject a dangling escape"),
+        "the noted entry stays out, got:\n{released}"
+    );
+    assert_eq!(
+        released.matches("the parser, explained by hand").count(),
+        1,
+        "the curated note is kept once, got:\n{released}"
+    );
+    assert!(
+        released.contains("### Fixed\n\n- the parser, explained by hand\n- keep the cursor on the same line\n\n### Added\n\n- a flag"),
+        "the other generated entries still merge in place, got:\n{released}"
+    );
+    assert_eq!(result.noted_entries, noted);
+    assert!(result.cited_entries.is_empty());
+    assert_eq!(result.omitted_entries, noted);
+    assert_eq!(result.replaced_generated_entries, 1);
+    assert_eq!(
+        result.merged_entries,
+        vec![
+            "keep the cursor on the same line".to_string(),
+            "a flag".to_string()
+        ]
+    );
+}
+
+/// An entry counts as noted only when it matches the generated text exactly:
+/// the coverage list is derived from the same renderer, so a near miss is a
+/// different entry and still merges.
+#[test]
+fn merge_matches_noted_entries_by_exact_generated_text() {
+    let existing =
+        "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- by hand\n\n## [0.1.0] - 2026-01-01\n";
+    let generated =
+        "## [0.1.1] - 2026-06-01\n\n### Fixed\n\n- **parser**: reject a dangling escape\n";
+    let noted = vec!["reject a dangling escape".to_string()];
+
+    let result =
+        integrate_changelog_with_coverage(Some(existing), generated, CuratedPolicy::Merge, &noted)
+            .unwrap();
+
+    assert!(result.noted_entries.is_empty());
+    assert_eq!(
+        result.merged_entries,
+        vec!["**parser**: reject a dangling escape".to_string()]
+    );
+}
+
+/// The replace policy already drops every generated entry, so coverage adds
+/// nothing there and the report keeps its single "replaced" list.
+#[test]
+fn replace_policy_reports_noted_entries_as_replaced_only() {
+    let existing =
+        "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- by hand\n\n## [0.1.0] - 2026-01-01\n";
+    let generated = "## [0.1.1] - 2026-06-01\n\n### Fixed\n\n- generated fix\n";
+    let noted = vec!["generated fix".to_string()];
+
+    let result = integrate_changelog_with_coverage(
+        Some(existing),
+        generated,
+        CuratedPolicy::Replace,
+        &noted,
+    )
+    .unwrap();
+
+    assert_eq!(result.omitted_entries, noted);
+    assert!(result.noted_entries.is_empty());
+    assert!(result.cited_entries.is_empty());
+}
+
+/// Coverage is matched by content, so the entries a caller names as noted must
+/// be rendered by the same code that renders the section: every entry returned
+/// appears verbatim as a list item in the generated section, and nothing else
+/// does, with and without a remote and in both unconventional modes.
+#[test]
+fn generated_entries_for_matches_the_rendered_section_entries() {
+    let commits = vec![
+        Commit {
+            hash: "aaaaaaa1111111111111111111111111111111111".to_string(),
+            message: "feat(cli): add a flag".to_string(),
+        },
+        Commit {
+            hash: "bbbbbbb2222222222222222222222222222222222".to_string(),
+            message: "fix: reject a dangling escape".to_string(),
+        },
+        Commit {
+            hash: "ccccccc3333333333333333333333333333333333".to_string(),
+            message: "feat!: drop the legacy flag".to_string(),
+        },
+        Commit {
+            hash: "ddddddd4444444444444444444444444444444444".to_string(),
+            message: "chore: tidy".to_string(),
+        },
+        Commit {
+            hash: "eeeeeee5555555555555555555555555555555555".to_string(),
+            message: "Merge branch 'topic'".to_string(),
+        },
+        Commit {
+            hash: "fffffff6666666666666666666666666666666666".to_string(),
+            message: "update the readme".to_string(),
+        },
+    ];
+    for remote in [None, Some("https://github.com/owner/repo")] {
+        for mode in ["include", "exclude"] {
+            let section =
+                generate_changelog_with_mode(&commits, "0.2.0", Some("v0.1.0"), remote, mode)
+                    .unwrap();
+            // The section groups entries by type while the helper keeps commit
+            // order; coverage is matched by content, so compare as sets.
+            let mut rendered: Vec<&str> = section
+                .lines()
+                .filter_map(|line| line.strip_prefix("- "))
+                .collect();
+            rendered.sort_unstable();
+            let mut entries = generated_entries_for(&commits, remote, mode);
+            entries.sort_unstable();
+            assert_eq!(
+                entries, rendered,
+                "remote {remote:?}, mode {mode}: entries must match the rendered section:\n{section}"
+            );
+            assert_eq!(
+                entries.len(),
+                if mode == "include" { 4 } else { 3 },
+                "remote {remote:?}, mode {mode}: unexpected entry count:\n{section}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unreleased_entries_reads_the_list_items_of_the_unreleased_section_only() {
+    let content = "\
+# Changelog
+
+Some preamble with a `- ` inside a sentence.
+
+## [Unreleased]
+
+### Fixed
+
+- **parser**: reject a dangling escape
+* a star item
+
+```md
+- inside a fence
+```
+
+  - indented item
+
+## [0.1.0] - 2026-01-01
+
+### Added
+
+- released item
+";
+    assert_eq!(
+        unreleased_entries(content),
+        vec![
+            "**parser**: reject a dangling escape".to_string(),
+            "a star item".to_string(),
+            "indented item".to_string(),
+        ]
+    );
+    assert!(unreleased_entries("# Changelog\n\n## [0.1.0]\n\n- released\n").is_empty());
+    assert!(
+        unreleased_entries("## [Unreleased]\n\n## [0.1.0]\n\n- released\n").is_empty(),
+        "an empty section yields no entries"
+    );
+    assert_eq!(
+        unreleased_entries("## Unreleased\n\n- unbracketed form\n"),
+        vec!["unbracketed form".to_string()]
     );
 }
 

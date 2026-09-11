@@ -249,6 +249,37 @@ pub(crate) fn changelog_commits_since_tag(root: &Path, tag: Option<&str>) -> Res
     Ok(commits)
 }
 
+/// Full hashes of the commits since `tag` whose own change added at least one
+/// list entry under `## [Unreleased]` in CHANGELOG.md, newest first. Such a
+/// commit brought its release note with it, so the entry generated from its
+/// subject would only repeat that note. Each commit is judged against its
+/// first parent; a root commit counts every entry it introduces.
+pub fn commits_adding_unreleased_notes(root: &Path, tag: Option<&str>) -> Result<Vec<String>> {
+    let range = tag.map_or_else(|| "HEAD".to_string(), |tag| format!("{tag}..HEAD"));
+    let touched = git_output(root, &["log", &range, "--format=%H", "--", "CHANGELOG.md"])?;
+    let mut noted = Vec::new();
+    for hash in touched
+        .lines()
+        .map(str::trim)
+        .filter(|hash| !hash.is_empty())
+    {
+        let Some(after) = git_output_optional(root, &["show", &format!("{hash}:CHANGELOG.md")])?
+        else {
+            continue;
+        };
+        let before = git_output_optional(root, &["show", &format!("{hash}^:CHANGELOG.md")])?
+            .map(|content| crate::changelog::unreleased_entries(&content))
+            .unwrap_or_default();
+        if crate::changelog::unreleased_entries(&after)
+            .iter()
+            .any(|entry| !before.contains(entry))
+        {
+            noted.push(hash.to_string());
+        }
+    }
+    Ok(noted)
+}
+
 fn read_nul_field(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>> {
     let mut field = Vec::new();
     let read = reader

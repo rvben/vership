@@ -346,6 +346,92 @@ fn push_with_tag_is_atomic_when_remote_tag_conflicts() {
     );
 }
 
+fn commit_changelog(dir: &std::path::Path, content: &str, msg: &str) -> String {
+    std::fs::write(dir.join("CHANGELOG.md"), content).unwrap();
+    git_command(dir, &["add", "CHANGELOG.md"]);
+    git_command(dir, &["commit", "-m", msg]);
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+/// Each commit since the tag is judged by its own diff of CHANGELOG.md: only a
+/// commit that added an entry under `## [Unreleased]` counts. Editing a
+/// released section, removing a note, touching other files, and anything at or
+/// before the tag are all negative controls.
+#[test]
+fn commits_adding_unreleased_notes_judges_each_commit_by_its_own_diff() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    let released = "## [0.1.0] - 2026-01-01\n\n### Added\n\n- initial\n";
+    let before_tag = commit_changelog(
+        root,
+        &format!("# Changelog\n\n## [Unreleased]\n\n- note before the tag\n\n{released}"),
+        "docs: note before the tag",
+    );
+    create_tag(root, "v0.1.0");
+
+    let adds_first = commit_changelog(
+        root,
+        &format!(
+            "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- **parser**: the fix, by hand\n\n{released}"
+        ),
+        "fix(parser): reject a dangling escape",
+    );
+    let edits_released = commit_changelog(
+        root,
+        &format!(
+            "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- **parser**: the fix, by hand\n\n## [0.1.0] - 2026-01-01\n\n### Added\n\n- initial, reworded\n"
+        ),
+        "docs: reword the released note",
+    );
+    create_commit(root, "feat: no note of its own");
+    let adds_second = commit_changelog(
+        root,
+        "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- **parser**: the fix, by hand\n\n### Added\n\n- **cli**: the flag, by hand\n\n## [0.1.0] - 2026-01-01\n\n### Added\n\n- initial, reworded\n",
+        "feat(cli): add a flag",
+    );
+    let removes = commit_changelog(
+        root,
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- **cli**: the flag, by hand\n\n## [0.1.0] - 2026-01-01\n\n### Added\n\n- initial, reworded\n",
+        "docs: drop the parser note",
+    );
+
+    let noted = vership::git::commits_adding_unreleased_notes(root, Some("v0.1.0")).unwrap();
+    assert_eq!(
+        noted,
+        vec![adds_second.clone(), adds_first.clone()],
+        "newest first, only the commits that added an Unreleased entry"
+    );
+    for excluded in [&before_tag, &edits_released, &removes] {
+        assert!(!noted.contains(excluded));
+    }
+
+    let all = vership::git::commits_adding_unreleased_notes(root, None).unwrap();
+    assert_eq!(
+        all,
+        vec![adds_second, adds_first, before_tag],
+        "without a tag the whole history is judged, including the root commit"
+    );
+}
+
+#[test]
+fn commits_adding_unreleased_notes_is_empty_without_a_changelog() {
+    let dir = TempDir::new().unwrap();
+    init_git_repo(dir.path());
+    create_commit(dir.path(), "init");
+    create_commit(dir.path(), "fix: something");
+    assert!(
+        vership::git::commits_adding_unreleased_notes(dir.path(), None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[test]
 fn has_staged_changes_reflects_index_state() {
     let dir = TempDir::new().unwrap();

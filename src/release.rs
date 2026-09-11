@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::artifacts;
 use crate::changelog::{self, ChangelogIntegration, CuratedPolicy};
@@ -241,9 +241,20 @@ pub fn changelog_preview_for(level: BumpLevel) -> Result<()> {
     }
 
     let curated_policy = Config::load_curated_policy(&root.join("vership.toml"))?;
-    let update =
-        changelog::integrate_changelog_with_policy(existing.as_deref(), &generated, curated_policy)
-            .map_err(Error::CheckFailed)?;
+    let noted = noted_generated_entries(
+        &root,
+        &commits,
+        latest_tag.as_deref(),
+        remote_url.as_deref(),
+        &config.changelog.unconventional,
+    )?;
+    let update = changelog::integrate_changelog_with_coverage(
+        existing.as_deref(),
+        &generated,
+        curated_policy,
+        &noted,
+    )
+    .map_err(Error::CheckFailed)?;
     if update.promoted {
         report_curated_promotion("Previewing", &update, curated_policy);
     }
@@ -252,6 +263,29 @@ pub fn changelog_preview_for(level: BumpLevel) -> Result<()> {
 
     println!("{changelog_section}");
     Ok(())
+}
+
+/// The generated entries already covered because their own commit added a
+/// curated note under `## [Unreleased]`, rendered exactly as the generated
+/// section renders them so the merge can match them by content.
+fn noted_generated_entries(
+    root: &Path,
+    commits: &[git::Commit],
+    previous_tag: Option<&str>,
+    remote_url: Option<&str>,
+    unconventional_mode: &str,
+) -> Result<Vec<String>> {
+    let noted_hashes = git::commits_adding_unreleased_notes(root, previous_tag)?;
+    let noted_commits: Vec<git::Commit> = commits
+        .iter()
+        .filter(|commit| noted_hashes.contains(&commit.hash))
+        .cloned()
+        .collect();
+    Ok(changelog::generated_entries_for(
+        &noted_commits,
+        remote_url,
+        unconventional_mode,
+    ))
 }
 
 /// Say what promoting the curated `## [Unreleased]` notes did to the entries
@@ -271,10 +305,16 @@ fn report_curated_promotion(verb: &str, update: &ChangelogIntegration, policy: C
                     "generated entries"
                 )
             );
-            if !update.omitted_entries.is_empty() {
+            if !update.cited_entries.is_empty() {
                 summary.push_str(&format!(
                     ", {} already cited",
-                    counted(update.omitted_entries.len(), "entry", "entries")
+                    counted(update.cited_entries.len(), "entry", "entries")
+                ));
+            }
+            if !update.noted_entries.is_empty() {
+                summary.push_str(&format!(
+                    ", {} noted by its own commit",
+                    counted(update.noted_entries.len(), "entry", "entries")
                 ));
             }
             summary.push(')');
@@ -282,8 +322,11 @@ fn report_curated_promotion(verb: &str, update: &ChangelogIntegration, policy: C
             for entry in &update.merged_entries {
                 eprintln!("    merged: {}", changelog::entry_summary(entry));
             }
-            for entry in &update.omitted_entries {
+            for entry in &update.cited_entries {
                 eprintln!("    cited:  {}", changelog::entry_summary(entry));
+            }
+            for entry in &update.noted_entries {
+                eprintln!("    noted:  {}", changelog::entry_summary(entry));
             }
         }
         CuratedPolicy::Replace => {
@@ -605,11 +648,19 @@ fn execute(
     let integration = if changelog_already_written {
         None
     } else {
+        let noted = noted_generated_entries(
+            &root,
+            &commits,
+            plan.previous_tag.as_deref(),
+            remote_url.as_deref(),
+            &config.changelog.unconventional,
+        )?;
         Some(
-            changelog::integrate_changelog_with_policy(
+            changelog::integrate_changelog_with_coverage(
                 existing.as_deref(),
                 &changelog_section,
                 curated_policy,
+                &noted,
             )
             .map_err(Error::CheckFailed)?,
         )
