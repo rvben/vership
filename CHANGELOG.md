@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.24](https://github.com/rvben/vership/compare/v0.5.23...v0.5.24) - 2026-09-11
+
 ### Fixed
 
 - **changelog**: a commit that adds its own note under `## [Unreleased]` no longer has its generated entry listed a second time. Coverage used to be judged only by a cited commit hash, which a commit cannot know for itself, so every change that shipped with its release note appeared twice in the promoted section. Such entries are now reported as `noted` next to the merged and cited ones
