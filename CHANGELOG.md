@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.25](https://github.com/rvben/vership/compare/v0.5.24...v0.5.25) - 2026-09-27
+
+### Fixed
+
+- **deps**: update rustls to 0.23.45 for RUSTSEC-2026-0285 ([a4ce572](https://github.com/rvben/vership/commit/a4ce57273ed7b98724bc1ae1ff76fba3146e6308))
+
 ## [0.5.24](https://github.com/rvben/vership/compare/v0.5.23...v0.5.24) - 2026-09-11
 
 ### Fixed

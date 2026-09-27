@@ -2461,7 +2461,7 @@ checksum = "7ba6f5989077681266825251a52748b8c1d8a4ad098cc37e440103d0ea717fc0"
 
 [[package]]
 name = "vership"
-version = "0.5.24"
+version = "0.5.25"
 dependencies = [
  "assert_cmd",
  "base64 0.22.1",
