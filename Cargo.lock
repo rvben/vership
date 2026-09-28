@@ -2077,7 +2077,7 @@ dependencies = [
 
 [[package]]
 name = "vership"
-version = "0.5.25"
+version = "0.5.26"
 dependencies = [
  "assert_cmd",
  "base64",

@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.26](https://github.com/rvben/vership/compare/v0.5.25...v0.5.26) - 2026-09-28
+
+### Fixed
+
+- **deps**: bump httpmock to 0.8 to drop unmaintained async-std ([345c8c2](https://github.com/rvben/vership/commit/345c8c213db7dfaf3529810add55b05fdb1bef29))
+- **bump**: do not rewrite path deps of independently versioned members ([87040f3](https://github.com/rvben/vership/commit/87040f38a07d47b2e612fe83a8909f13e5b86e33))
+
 ## [0.5.25](https://github.com/rvben/vership/compare/v0.5.24...v0.5.25) - 2026-09-27
 
 ### Fixed
