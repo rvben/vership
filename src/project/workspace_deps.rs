@@ -11,6 +11,17 @@
 //! rewrites their version requirements everywhere they appear as a
 //! dependency, using `toml_edit` so unrelated formatting, comments, and key
 //! order survive the rewrite.
+//!
+//! Not every `[workspace].members` entry shares the version being bumped: a
+//! member can declare its own independent `[package].version` (e.g.
+//! `version = "0.2.1"`) instead of inheriting via `version.workspace = true`.
+//! `write_version` only ever rewrites the root manifest's version, so such a
+//! member's own version is untouched by this bump, and a dependent's
+//! `version = "X"` requirement on it must be left alone too: rewriting it to
+//! the new root version would point at a version the member was never given,
+//! breaking resolution instead of preserving it. Only members that actually
+//! inherit the shared version (`version.workspace = true`) are lockstep with
+//! this bump and eligible for the rewrite.
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -45,7 +56,9 @@ pub fn update_intra_workspace_dep_versions(
     for dir in &member_dirs {
         let manifest_path = dir.join("Cargo.toml");
         let doc = read_document(&manifest_path)?;
-        if let Some(name) = package_name(&doc) {
+        if member_is_lockstep(&doc)
+            && let Some(name) = package_name(&doc)
+        {
             member_names.insert(name);
         }
         manifests.push((manifest_path, doc));
@@ -177,6 +190,22 @@ fn package_name(doc: &DocumentMut) -> Option<String> {
         .and_then(|t| t.get("name"))
         .and_then(Item::as_str)
         .map(str::to_string)
+}
+
+/// Whether a member manifest's own `[package].version` inherits the shared
+/// workspace version (`version.workspace = true`) rather than declaring an
+/// independent literal (`version = "X"`). Only a lockstep member is actually
+/// being bumped by this `write_version` call, so only a lockstep member's
+/// name is eligible to have dependents' `version = "X"` requirements on it
+/// rewritten.
+fn member_is_lockstep(doc: &DocumentMut) -> bool {
+    doc.get("package")
+        .and_then(Item::as_table)
+        .and_then(|t| t.get("version"))
+        .and_then(Item::as_table_like)
+        .and_then(|t| t.get("workspace"))
+        .and_then(Item::as_bool)
+        .unwrap_or(false)
 }
 
 /// Scan and rewrite every dependency table in a single already-parsed

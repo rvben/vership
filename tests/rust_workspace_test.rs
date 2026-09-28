@@ -418,6 +418,116 @@ edition = "2021"
     );
 }
 
+/// A workspace member that declares its own independent `[package].version`
+/// (not `version.workspace = true`) is not lockstep with the root version:
+/// bumping the root must not rewrite a dependent's `version = "X"`
+/// requirement on it, since the member's own version was never changed by
+/// this bump and the rewrite would point resolution at a version the member
+/// does not have. Reproduces the yuki-cli/yuki-client shape: a root crate
+/// with its own `[package].version` depending on a path member that carries
+/// its own independently tracked version.
+#[test]
+fn workspace_bump_leaves_independently_versioned_member_dependency_untouched() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "Cargo.toml",
+        r#"[workspace]
+members = ["yuki-client"]
+
+[package]
+name = "yuki-cli"
+version = "0.1.12"
+edition = "2024"
+
+[dependencies]
+yuki-client = { path = "yuki-client", version = "0.2.1" }
+"#,
+    );
+    write(
+        dir.path(),
+        "yuki-client/Cargo.toml",
+        r#"[package]
+name = "yuki-client"
+version = "0.2.1"
+edition = "2024"
+"#,
+    );
+
+    let project = RustProject::new();
+    project
+        .write_version(dir.path(), &Version::new(0, 1, 13))
+        .unwrap();
+
+    let root_content = read(dir.path(), "Cargo.toml");
+    assert!(
+        root_content.contains(r#"version = "0.1.13""#),
+        "root package.version not bumped:\n{root_content}"
+    );
+    assert!(
+        root_content.contains(r#"yuki-client = { path = "yuki-client", version = "0.2.1" }"#),
+        "independently versioned member's dependency requirement was incorrectly rewritten:\n{root_content}"
+    );
+
+    let member_content = read(dir.path(), "yuki-client/Cargo.toml");
+    assert!(
+        member_content.contains(r#"version = "0.2.1""#),
+        "independently versioned member's own manifest was modified:\n{member_content}"
+    );
+
+    let files = project.modified_files();
+    assert!(
+        !files.contains(&PathBuf::from("yuki-client").join("Cargo.toml")),
+        "independently versioned member's manifest incorrectly reported as modified: {files:?}"
+    );
+}
+
+/// The positive counterpart: a lockstep member (`version.workspace = true`)
+/// in the same root-is-also-a-crate shape still has dependents' requirements
+/// on it rewritten, same as the pure-workspace-root case above.
+#[test]
+fn workspace_bump_still_rewrites_lockstep_member_dependency_when_root_is_a_crate() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "Cargo.toml",
+        r#"[workspace]
+members = ["core"]
+
+[workspace.package]
+version = "0.1.12"
+
+[package]
+name = "acme-cli"
+version = "0.1.12"
+edition = "2024"
+
+[dependencies]
+acme-core = { path = "core", version = "0.1.12" }
+"#,
+    );
+    write(
+        dir.path(),
+        "core/Cargo.toml",
+        r#"[package]
+name = "acme-core"
+version.workspace = true
+edition = "2024"
+"#,
+    );
+
+    let project = RustProject::new();
+    project
+        .write_version(dir.path(), &Version::new(0, 1, 13))
+        .unwrap();
+
+    let root_content = read(dir.path(), "Cargo.toml");
+    assert!(
+        root_content.contains(r#"acme-core = { path = "core", version = "0.1.13" }"#),
+        "lockstep member's dependency requirement was not rewritten:\n{root_content}"
+    );
+}
+
 /// An external registry dependency that happens to share its version string
 /// with the pre-bump workspace version must not be touched: it is not a
 /// workspace member, matching is by name, never by coincidental version.
