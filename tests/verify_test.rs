@@ -798,7 +798,7 @@ fn ghcr_both_tags_missing_is_not_found() {
     });
     server.mock(|when, then| {
         when.method(GET)
-            .path_matches(Regex::new("/v2/rvben/myapp/manifests/.*").unwrap());
+            .path_matches(regex::Regex::new("/v2/rvben/myapp/manifests/.*").unwrap());
         then.status(404);
     });
     let result = checkers::ghcr(&agent(), &server.base_url(), "rvben/myapp", "1.2.3", None);
