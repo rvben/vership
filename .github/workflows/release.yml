@@ -250,7 +250,7 @@ jobs:
         run: |
           set -o pipefail
           for target in x86_64-apple-darwin aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-            sha=$(cat "/tmp/artifacts/build-${target}/vership-${GITHUB_REF_NAME}-${target}.tar.gz.sha256" | awk '{print $1}')
+            sha=$(awk '{print $1}' "/tmp/artifacts/build-${target}/vership-${GITHUB_REF_NAME}-${target}.tar.gz.sha256")
             key=$(echo "${target}" | tr '-' '_')
             echo "${key}=${sha}" >> "$GITHUB_OUTPUT"
           done
