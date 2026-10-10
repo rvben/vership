@@ -1,0 +1,3 @@
+# Adopt security and policy checks gradually; new findings fail CI.
+profile: default
+baseline: .github/jactionlint-baseline.json

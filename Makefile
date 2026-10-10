@@ -1,4 +1,4 @@
-.PHONY: build release test lint fmt check clean install release-patch release-minor release-major
+.PHONY: build release test lint lint-actions fmt check clean install release-patch release-minor release-major
 
 build:
 	cargo build
@@ -12,6 +12,9 @@ test:
 lint:
 	cargo fmt -- --check
 	cargo clippy -- -D warnings
+
+lint-actions:
+	bash scripts/lint-actions.sh
 
 fmt:
 	cargo fmt

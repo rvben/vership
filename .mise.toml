@@ -7,7 +7,7 @@ BINSTALL_DISABLE_TELEMETRY = "true"
 
 [tools]
 rust = "1.96.0"
-actionlint = "1.7.12"
+"github:jdx/jactionlint" = "2.1.0"
 cargo-binstall = "1.22.0"
 "cargo:cargo-nextest" = "0.9.143"
 
@@ -17,6 +17,6 @@ cargo.binstall = true
 [tasks.setup]
 description = "Install the exact development toolchain"
 run = """
-mise install rust actionlint cargo-binstall
+mise install rust "github:jdx/jactionlint" cargo-binstall
 mise install cargo:cargo-nextest
 """

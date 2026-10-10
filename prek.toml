@@ -34,3 +34,11 @@ language = "system"
 types = ["rust"]
 pass_filenames = false
 stages = ["pre-push"]
+
+[[repos.hooks]]
+id = "jactionlint"
+name = "Lint GitHub Actions"
+entry = "bash scripts/lint-actions.sh"
+language = "system"
+files = '^([.]github/.*[.](yml|yaml|json)|action[.]ya?ml|scripts/lint-actions[.]sh|[.]mise[.]toml|prek[.]toml)$'
+pass_filenames = false
