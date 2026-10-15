@@ -25,8 +25,12 @@ jobs:
       max-bump: minor
       prepare-command: >-
         rustup toolchain install 1.96.0 --profile minimal --component clippy,rustfmt &&
-        rustup default 1.96.0
-      validation-command: make check
+        rustup default 1.96.0 &&
+        go install github.com/jdx/jactionlint/v2/cmd/jactionlint@v2.1.0 &&
+        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # Use the repository validator, which supports release concurrency.queue.
+      validate-actions: false
+      validation-command: make lint-actions check
       fail-on-blocked: false
       branch: deps/upd
       commit-message: "chore(deps): weekly dependency update"
