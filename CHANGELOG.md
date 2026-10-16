@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.27](https://github.com/rvben/vership/compare/v0.5.26...v0.5.27) - 2026-10-16
+
 ### Added
 
 - Explicit independent projects with `--project`, per-package configuration,
@@ -19,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   locks and pushes that would include another project's unfinished preparation.
 - Recover interrupted secondary version files and tag-versioned Go releases;
   update only `[project].version` in Python TOML, including single-quoted versions.
+
+- **ci**: validate dependency updates with jactionlint ([26c2ae1](https://github.com/rvben/vership/commit/26c2ae1e93ee9fb0e382a8d75f2faef151d893a3))
+- **ci**: read release checksums directly with awk ([ea4a6ea](https://github.com/rvben/vership/commit/ea4a6ea9d5f1133a82aec6ced2e58cf340ef794c))
 
 ### Changed
 
