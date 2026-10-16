@@ -255,19 +255,27 @@ pub(crate) fn changelog_commits_since_tag(root: &Path, tag: Option<&str>) -> Res
 /// subject would only repeat that note. Each commit is judged against its
 /// first parent; a root commit counts every entry it introduces.
 pub fn commits_adding_unreleased_notes(root: &Path, tag: Option<&str>) -> Result<Vec<String>> {
+    commits_adding_unreleased_notes_at(root, tag, "CHANGELOG.md")
+}
+
+pub(crate) fn commits_adding_unreleased_notes_at(
+    root: &Path,
+    tag: Option<&str>,
+    changelog: &str,
+) -> Result<Vec<String>> {
     let range = tag.map_or_else(|| "HEAD".to_string(), |tag| format!("{tag}..HEAD"));
-    let touched = git_output(root, &["log", &range, "--format=%H", "--", "CHANGELOG.md"])?;
+    let touched = git_output(root, &["log", &range, "--format=%H", "--", changelog])?;
     let mut noted = Vec::new();
     for hash in touched
         .lines()
         .map(str::trim)
         .filter(|hash| !hash.is_empty())
     {
-        let Some(after) = git_output_optional(root, &["show", &format!("{hash}:CHANGELOG.md")])?
+        let Some(after) = git_output_optional(root, &["show", &format!("{hash}:{changelog}")])?
         else {
             continue;
         };
-        let before = git_output_optional(root, &["show", &format!("{hash}^:CHANGELOG.md")])?
+        let before = git_output_optional(root, &["show", &format!("{hash}^:{changelog}")])?
             .map(|content| crate::changelog::unreleased_entries(&content))
             .unwrap_or_default();
         if crate::changelog::unreleased_entries(&after)
@@ -370,7 +378,7 @@ pub fn has_staged_changes(root: &Path) -> Result<bool> {
 
 /// Stage the given files for commit.
 pub fn stage_files(root: &Path, files: &[&str]) -> Result<()> {
-    let mut args = vec!["add"];
+    let mut args = vec!["--literal-pathspecs", "add", "--"];
     args.extend(files);
     let success = git_success(root, &args)?;
     if !success {
@@ -410,6 +418,198 @@ pub fn push_with_tag(root: &Path, branch: &str, tag: &str) -> Result<()> {
         &["push", "--atomic", "origin", &branch_refspec, &tag_refspec],
     )?;
     Ok(())
+}
+
+pub(crate) fn repository_root(root: &Path) -> Result<std::path::PathBuf> {
+    Ok(
+        std::path::PathBuf::from(git_output(root, &["rev-parse", "--show-toplevel"])?)
+            .canonicalize()?,
+    )
+}
+pub(crate) fn valid_tag(root: &Path, tag: &str) -> Result<bool> {
+    git_success(root, &["check-ref-format", &format!("refs/tags/{tag}")])
+}
+pub(crate) fn all_tags(root: &Path) -> Result<Vec<String>> {
+    Ok(git_output(root, &["tag", "--list"])?
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+pub(crate) fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
+    git_success(root, &["merge-base", "--is-ancestor", ancestor, descendant])
+}
+pub(crate) fn commit_paths(root: &Path, hash: &str) -> Result<Vec<std::path::PathBuf>> {
+    path_output(
+        root,
+        &[
+            "diff-tree",
+            "--root",
+            "--diff-merges=first-parent",
+            "--no-commit-id",
+            "--name-only",
+            "--no-renames",
+            "-r",
+            "-z",
+            hash,
+        ],
+    )
+}
+pub(crate) fn changed_paths(root: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let mut paths = Vec::new();
+    for args in [
+        vec!["diff", "--name-only", "--no-renames", "-z"],
+        vec!["diff", "--cached", "--name-only", "--no-renames", "-z"],
+    ] {
+        paths.extend(path_output(root, &args)?);
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+pub(crate) fn commit_preparation(root: &Path, tag: &str) -> Result<()> {
+    git_output(
+        root,
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            &format!("chore: refresh release preparation for {tag}\n\nVership-Release: {tag}"),
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn head_oid(root: &Path) -> Result<String> {
+    git_output(root, &["rev-parse", "HEAD"])
+}
+
+fn path_output(root: &Path, args: &[&str]) -> Result<Vec<std::path::PathBuf>> {
+    let out = Command::new("git").args(args).current_dir(root).output()?;
+    if !out.status.success() {
+        return Err(Error::Git(
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ));
+    }
+    out.stdout
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let s = std::str::from_utf8(p)
+                .map_err(|_| Error::Config("non-UTF-8 release paths are unsupported".into()))?;
+            Ok(std::path::PathBuf::from(s))
+        })
+        .collect()
+}
+
+pub(crate) fn latest_release_marker(root: &Path, prefix: &str) -> Result<Option<String>> {
+    let messages = git_output(
+        root,
+        &[
+            "log",
+            "--format=%B%x00",
+            "--fixed-strings",
+            &format!("--grep=Vership-Release: {prefix}"),
+        ],
+    )?;
+    let mut latest: Option<(semver::Version, String)> = None;
+    for message in messages.split('\0') {
+        for line in message.lines() {
+            if let Some(tag) = line.trim().strip_prefix("Vership-Release: ")
+                && tag
+                    .strip_prefix(prefix)
+                    .is_some_and(|v| semver::Version::parse(v).is_ok())
+            {
+                let version =
+                    semver::Version::parse(tag.strip_prefix(prefix).expect("validated prefix"))
+                        .expect("validated version");
+                if latest
+                    .as_ref()
+                    .is_none_or(|(current, _)| version.cmp_precedence(current).is_gt())
+                {
+                    latest = Some((version, tag.to_owned()));
+                }
+            }
+        }
+    }
+    Ok(latest.map(|(_, tag)| tag))
+}
+
+pub(crate) fn prepared_oid(root: &Path, tag: &str) -> Result<Option<String>> {
+    git_output_optional(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("refs/vership/prepared/{tag}"),
+        ],
+    )
+}
+pub(crate) fn record_preparation(root: &Path, tag: &str) -> Result<()> {
+    let head = head_oid(root)?;
+    git_output(
+        root,
+        &["update-ref", &format!("refs/vership/prepared/{tag}"), &head],
+    )?;
+    Ok(())
+}
+pub(crate) fn tracked_path(root: &Path, path: &str) -> Result<bool> {
+    git_success(
+        root,
+        &[
+            "--literal-pathspecs",
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            path,
+        ],
+    )
+}
+
+/// Release markers that this branch push would newly publish. Query the actual
+/// remote head rather than trusting possibly stale remote-tracking refs.
+pub(crate) fn outgoing_release_tags(root: &Path, branch: &str) -> Result<Vec<String>> {
+    let remote = git_output(
+        root,
+        &[
+            "ls-remote",
+            "--heads",
+            "origin",
+            &format!("refs/heads/{branch}"),
+        ],
+    )?;
+    let range = if let Some(oid) = remote.split_whitespace().next() {
+        if git_output_optional(
+            root,
+            &["rev-parse", "--verify", &format!("{oid}^{{commit}}")],
+        )?
+        .is_none()
+        {
+            return Err(Error::CheckFailed(
+                "remote branch advanced; fetch and reconcile before pushing".into(),
+            ));
+        }
+        format!("{oid}..HEAD")
+    } else {
+        "HEAD".into()
+    };
+    let messages = git_output(
+        root,
+        &[
+            "log",
+            &range,
+            "--format=%B%x00",
+            "--fixed-strings",
+            "--grep=Vership-Release: ",
+        ],
+    )?;
+    Ok(messages
+        .lines()
+        .filter_map(|l| {
+            l.trim()
+                .strip_prefix("Vership-Release: ")
+                .map(str::to_owned)
+        })
+        .collect())
 }
 
 #[cfg(test)]

@@ -335,3 +335,19 @@ fn set_version(value: &mut Value, new_version: &semver::Version) {
     *new_value.decor_mut() = decor;
     *value = new_value;
 }
+
+pub(crate) fn release_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let doc = read_document(&root.join("Cargo.toml"))?;
+    let mut paths = vec![PathBuf::from("Cargo.toml"), PathBuf::from("Cargo.lock")];
+    if let Some(workspace) = doc.get("workspace").and_then(Item::as_table) {
+        for dir in discover_member_dirs(root, workspace)? {
+            paths.push(
+                dir.join("Cargo.toml")
+                    .strip_prefix(root)
+                    .map_err(|e| Error::Config(e.to_string()))?
+                    .to_path_buf(),
+            );
+        }
+    }
+    Ok(paths)
+}

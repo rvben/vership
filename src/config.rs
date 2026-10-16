@@ -227,12 +227,20 @@ impl Config {
 }
 
 pub fn show(output: &crate::output::OutputConfig) -> Result<()> {
-    let path = Path::new("vership.toml");
-    let config = Config::load_checked(path)?;
+    show_in(&crate::context::ReleaseContext::resolve(None)?, output)
+}
+
+pub(crate) fn show_in(
+    ctx: &crate::context::ReleaseContext,
+    output: &crate::output::OutputConfig,
+) -> Result<()> {
+    let config_path = ctx.config_path();
+    let path = config_path.as_path();
+    let config = &ctx.config;
     let allow_untracked = Config::load_allow_untracked(path)?;
     let curated = Config::load_curated_policy(path)?;
     if output.is_json() {
-        let mut value = serde_json::to_value(&config).map_err(|e| Error::Config(e.to_string()))?;
+        let mut value = serde_json::to_value(config).map_err(|e| Error::Config(e.to_string()))?;
         let root = value
             .as_object_mut()
             .ok_or_else(|| Error::Config("serialized config is not an object".to_string()))?;
@@ -251,12 +259,24 @@ pub fn show(output: &crate::output::OutputConfig) -> Result<()> {
                 Error::Config("serialized changelog config is not an object".to_string())
             })?
             .insert("curated".to_string(), serde_json::json!(curated.as_str()));
+        if let Some(targets) = &ctx.verify_targets {
+            value["verify"]["targets"] = serde_json::json!(targets);
+        }
+        if !ctx.independent_roots.is_empty() {
+            value["selection"] = serde_json::json!({"project": ctx.name, "root": ctx.root, "repository": ctx.repo, "tag_prefix": ctx.prefix});
+            if ctx.name.is_none() {
+                let source: toml::Value = toml::from_str(&std::fs::read_to_string(path)?)
+                    .map_err(|e| Error::Config(e.to_string()))?;
+                value["projects"] = serde_json::to_value(source.get("projects"))
+                    .map_err(|e| Error::Config(e.to_string()))?;
+            }
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(&value).map_err(|e| Error::Config(e.to_string()))?
         );
     } else {
-        let mut value = toml::Value::try_from(&config).map_err(|e| Error::Config(e.to_string()))?;
+        let mut value = toml::Value::try_from(config).map_err(|e| Error::Config(e.to_string()))?;
         let root = value
             .as_table_mut()
             .ok_or_else(|| Error::Config("serialized config is not a table".to_string()))?;
@@ -276,6 +296,36 @@ pub fn show(output: &crate::output::OutputConfig) -> Result<()> {
                 "curated".to_string(),
                 toml::Value::String(curated.as_str().to_string()),
             );
+        if let Some(targets) = &ctx.verify_targets {
+            value["verify"]["targets"] =
+                toml::Value::try_from(targets).map_err(|e| Error::Config(e.to_string()))?;
+        }
+        if !ctx.independent_roots.is_empty() {
+            let mut selection = toml::map::Map::new();
+            selection.insert(
+                "project".into(),
+                toml::Value::String(ctx.name.as_deref().unwrap_or("(root)").into()),
+            );
+            selection.insert(
+                "root".into(),
+                toml::Value::String(ctx.root.display().to_string()),
+            );
+            selection.insert("tag_prefix".into(), toml::Value::String(ctx.prefix.clone()));
+            value
+                .as_table_mut()
+                .unwrap()
+                .insert("selection".into(), toml::Value::Table(selection));
+            if ctx.name.is_none() {
+                let source: toml::Value = toml::from_str(&std::fs::read_to_string(path)?)
+                    .map_err(|e| Error::Config(e.to_string()))?;
+                if let Some(registry) = source.get("projects") {
+                    value
+                        .as_table_mut()
+                        .unwrap()
+                        .insert("projects".into(), registry.clone());
+                }
+            }
+        }
         print!(
             "{}",
             toml::to_string_pretty(&value).map_err(|e| Error::Config(e.to_string()))?
@@ -340,8 +390,15 @@ pub fn init() -> Result<()> {
 # command = "make generate"
 # files = ["generated.json"]     # Files the command produces
 
+# Independently released packages (root config only)
+# [projects.agent]
+# path = "packaging/agent"
+# tag_prefix = "agent-v"
+# paths = ["packaging/agent", "examples/agent"] # Repository-relative history scope
+
 # Post-release verification targets (vership verify)
 # [verify]
+# targets = ["tag", "pypi"]         # Required for named projects; disables inference
 # skip = []                        # Targets to skip: tag, release, crates, pypi, npm, homebrew, ghcr
 # tap = "owner/homebrew-tap"       # Homebrew tap repo
 # formula = "name"                 # Formula name (default: repo name)

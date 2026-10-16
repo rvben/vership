@@ -81,6 +81,10 @@ impl ProjectType for AnsibleProject {
         Ok(())
     }
 
+    fn release_files(&self, _root: &Path) -> Result<Vec<PathBuf>> {
+        Ok(vec![GALAXY_FILE.into()])
+    }
+
     fn modified_files(&self) -> Vec<PathBuf> {
         self.modified_files.borrow().clone()
     }

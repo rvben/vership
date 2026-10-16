@@ -1131,3 +1131,26 @@ fn version_heading_regex(version: &str) -> Regex {
     ))
     .expect("escaped version produces a valid regex")
 }
+
+/// Internal renderer with exact tag refs; legacy public renderers keep their v prefix.
+pub(crate) fn generate_for_tags(
+    commits: &[Commit],
+    version: &str,
+    previous_tag: Option<&str>,
+    tag: &str,
+    remote_url: Option<&str>,
+    mode: &str,
+) -> std::result::Result<String, String> {
+    let output = generate_changelog_with_mode(commits, version, None, remote_url, mode)?;
+    if let (Some(url), Some(previous)) = (remote_url, previous_tag) {
+        let first = output.lines().next().unwrap_or("");
+        let suffix = first.strip_prefix(&format!("## [{version}]")).unwrap_or("");
+        Ok(output.replacen(
+            first,
+            &format!("## [{version}]({url}/compare/{previous}...{tag}){suffix}"),
+            1,
+        ))
+    } else {
+        Ok(output)
+    }
+}

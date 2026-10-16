@@ -61,10 +61,35 @@ pub(crate) fn run_preflight_with_policy(
     allowed_local_tag: Option<&str>,
     check_remote_tag: bool,
 ) -> Result<()> {
+    run_preflight_in(
+        root,
+        root,
+        tag,
+        project,
+        options,
+        allow_untracked,
+        allowed_local_tag,
+        check_remote_tag,
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_preflight_in(
+    repo: &Path,
+    root: &Path,
+    tag: &str,
+    project: &dyn ProjectType,
+    options: &CheckOptions,
+    allow_untracked: bool,
+    allowed_local_tag: Option<&str>,
+    check_remote_tag: bool,
+    allowed_untracked: &[std::path::PathBuf],
+) -> Result<()> {
     // No uncommitted changes (skipped when resuming an interrupted release)
     if options.allow_uncommitted {
         output::print_check_pass("Uncommitted changes allowed (resuming interrupted release)");
-    } else if git::has_tracked_changes(root)? {
+    } else if git::has_tracked_changes(repo)? {
         output::print_check_fail("Uncommitted changes detected");
         return Err(Error::CheckFailed(
             "commit or stash your changes before releasing".to_string(),
@@ -73,7 +98,10 @@ pub(crate) fn run_preflight_with_policy(
 
     // A resume permits the tracked release files that an interrupted run left
     // behind, but unrelated untracked files remain subject to the same policy.
-    let untracked = git::untracked_files(root)?;
+    let untracked: Vec<_> = git::untracked_files(repo)?
+        .into_iter()
+        .filter(|path| !allowed_untracked.contains(&std::path::PathBuf::from(path)))
+        .collect();
     if !untracked.is_empty() && !allow_untracked {
         output::print_check_fail("Untracked files detected");
         let preview = untracked
@@ -108,7 +136,7 @@ pub(crate) fn run_preflight_with_policy(
     }
 
     // On expected branch
-    let branch = git::current_branch(root)?;
+    let branch = git::current_branch(repo)?;
     if branch != options.expected_branch {
         output::print_check_fail(&format!(
             "On branch '{branch}', expected '{}'",
@@ -123,7 +151,7 @@ pub(crate) fn run_preflight_with_policy(
 
     // Tag does not already exist. A duplicate tag is an incompatible-repeat
     // conflict: re-running cannot converge, so this gets its own error kind.
-    if git::tag_exists(root, tag)? && allowed_local_tag != Some(tag) {
+    if git::tag_exists(repo, tag)? && allowed_local_tag != Some(tag) {
         output::print_check_fail(&format!("Tag {tag} already exists"));
         return Err(Error::Conflict(format!("tag {tag} already exists")));
     }
@@ -134,8 +162,8 @@ pub(crate) fn run_preflight_with_policy(
     } else {
         output::print_check_pass(&format!("Tag {tag} does not exist"));
     }
-    if check_remote_tag && git::remote_exists(root, "origin")? {
-        if git::remote_tag_exists(root, tag)? {
+    if check_remote_tag && git::remote_exists(repo, "origin")? {
+        if git::remote_tag_exists(repo, tag)? {
             output::print_check_fail(&format!("Tag {tag} already exists on origin"));
             return Err(Error::Conflict(format!(
                 "tag {tag} already exists on origin; fetch and inspect it before releasing"

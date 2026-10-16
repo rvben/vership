@@ -384,9 +384,7 @@ fn commits_adding_unreleased_notes_judges_each_commit_by_its_own_diff() {
     );
     let edits_released = commit_changelog(
         root,
-        &format!(
-            "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- **parser**: the fix, by hand\n\n## [0.1.0] - 2026-01-01\n\n### Added\n\n- initial, reworded\n"
-        ),
+        "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- **parser**: the fix, by hand\n\n## [0.1.0] - 2026-01-01\n\n### Added\n\n- initial, reworded\n",
         "docs: reword the released note",
     );
     create_commit(root, "feat: no note of its own");

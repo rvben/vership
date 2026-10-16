@@ -81,6 +81,10 @@ impl ProjectType for RustProject {
         cargo_helpers::run_tests(root)
     }
 
+    fn release_files(&self, root: &Path) -> Result<Vec<PathBuf>> {
+        workspace_deps::release_files(root)
+    }
+
     fn modified_files(&self) -> Vec<PathBuf> {
         self.modified_files.borrow().clone()
     }

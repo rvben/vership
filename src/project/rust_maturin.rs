@@ -94,6 +94,14 @@ impl ProjectType for RustMaturinProject {
         cargo_helpers::run_tests(root)
     }
 
+    fn release_files(&self, root: &Path) -> Result<Vec<PathBuf>> {
+        let mut paths = workspace_deps::release_files(root)?;
+        if root.join("pyproject.toml").exists() {
+            paths.push("pyproject.toml".into());
+        }
+        Ok(paths)
+    }
+
     fn modified_files(&self) -> Vec<PathBuf> {
         self.modified_files.borrow().clone()
     }

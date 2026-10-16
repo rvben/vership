@@ -51,6 +51,19 @@ fn main() {
 }
 
 fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
+    if cli.project.is_some()
+        && matches!(
+            cli.command,
+            Command::Schema
+                | Command::Capabilities
+                | Command::Completions { .. }
+                | Command::Config(ConfigCommand::Init)
+        )
+    {
+        return Err(Error::Config(
+            "--project is not supported for this command".into(),
+        ));
+    }
     match cli.command {
         Command::Schema => {
             use clap::CommandFactory;
@@ -68,7 +81,7 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
                 "version": env!("CARGO_PKG_VERSION"),
                 "clispec": "0.3",
                 "output": ["text", "json"],
-                "features": ["schema", "dry-run releases", "release verification", "shell completions"]
+                "features": ["schema", "dry-run releases", "release verification", "shell completions", "independent projects"]
             });
             if output.is_json() {
                 println!(
@@ -91,55 +104,7 @@ fn run(cli: Cli, output: OutputConfig) -> Result<(), Error> {
             Ok(())
         }
         Command::Config(ConfigCommand::Init) => vership::config::init(),
-        Command::Config(ConfigCommand::Show) => vership::config::show(&output),
-        Command::Status {
-            limit,
-            offset,
-            fields,
-        } => vership::release::status(&output, limit, offset, fields.as_deref()),
-        Command::Verify {
-            version,
-            targets,
-            skip,
-        } => vership::verify::run(
-            version.as_deref(),
-            targets.as_deref(),
-            skip.as_deref(),
-            &output,
-        ),
-        Command::UpdateLocal {
-            version,
-            managers,
-            skip,
-            dry_run,
-        } => vership::update_local::run(
-            version.as_deref(),
-            managers.as_deref(),
-            skip.as_deref(),
-            dry_run,
-            &output,
-        ),
-        Command::Preflight { level } => vership::release::preflight_for(level),
-        Command::Changelog { level } => vership::release::changelog_preview_for(level),
-        Command::Bump {
-            level,
-            dry_run,
-            skip_checks,
-            no_push,
-            prepare,
-        } => vership::release::bump_with_prepare(level, dry_run, skip_checks, no_push, prepare),
-        Command::Release {
-            dry_run,
-            skip_checks,
-            no_push,
-            prepare,
-        } => vership::release::release_current_with_prepare(dry_run, skip_checks, no_push, prepare),
-        Command::Resume {
-            dry_run,
-            skip_checks,
-            no_push,
-            prepare,
-        } => vership::release::resume_with_prepare(dry_run, skip_checks, no_push, prepare),
+        command => vership::release::run_project(command, cli.project.as_deref(), &output),
     }
 }
 

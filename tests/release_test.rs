@@ -1318,11 +1318,10 @@ fn resume_finishes_tagging_when_commit_already_landed() {
     );
 }
 
-/// The fix-on-top retag flow: after deleting the tag, a correction commit is
-/// added. The release must tag the corrected HEAD without a fresh release
-/// commit (the changelog and version are already in history).
+/// A correction after preparation requires explicit review and refresh. The
+/// refresh records the checked HEAD without replaying bump side effects.
 #[test]
-fn release_retags_corrected_head_after_fix_commit() {
+fn release_requires_refresh_after_fix_commit() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
     setup_committed_release_without_tag(root);
@@ -1348,6 +1347,22 @@ fn release_retags_corrected_head_after_fix_commit() {
     git(root, &["commit", "-m", "fix: correct the release"]);
     let commits_before = commit_count(root);
 
+    let rejected = AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["release", "--skip-checks", "--no-push"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("HEAD advanced"));
+    assert!(!tag_exists(root, "v0.1.6"));
+    AssertCommand::cargo_bin("vership")
+        .unwrap()
+        .current_dir(root)
+        .args(["release", "--skip-checks", "--prepare"])
+        .assert()
+        .success();
     AssertCommand::cargo_bin("vership")
         .unwrap()
         .current_dir(root)
@@ -1356,7 +1371,11 @@ fn release_retags_corrected_head_after_fix_commit() {
         .success();
 
     assert!(tag_exists(root, "v0.1.6"), "tag must be re-created");
-    assert_eq!(commit_count(root), commits_before, "no extra commit");
+    assert_eq!(
+        commit_count(root),
+        commits_before + 1,
+        "explicit preparation refresh"
+    );
     assert!(
         !hook_marker.exists(),
         "pre-bump hook must not replay after a prepared release commit"

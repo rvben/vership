@@ -4,7 +4,7 @@ pub mod report;
 
 use std::path::{Path, PathBuf};
 
-use crate::config::Config;
+use crate::context::ReleaseContext;
 use crate::error::{Error, Result};
 use crate::output::OutputConfig;
 use crate::verify::checkers;
@@ -66,15 +66,37 @@ pub fn run(
     dry_run: bool,
     output: &OutputConfig,
 ) -> Result<()> {
-    let root = Path::new(".");
-    let config = Config::load_checked(Path::new("vership.toml"))?;
-    let version = crate::verify::resolve_version(root, &config, version)?;
-    let selected = select_managers(only, skip)?;
+    run_in(
+        &ReleaseContext::resolve(None)?,
+        version,
+        only,
+        skip,
+        dry_run,
+        output,
+    )
+}
 
+/// The selected project's identity as each selected manager knows it.
+pub(crate) struct Identity {
+    pub homebrew: Option<(String, Vec<String>)>,
+    pub cargo: Vec<targets::CargoLocalPackage>,
+    pub packages: Vec<(Manager, Package)>,
+    pub owned: Vec<PathBuf>,
+}
+
+/// Resolve what the selected project is called by each selected manager, and
+/// which directories its path installs come from. Nothing is probed or asked.
+///
+/// A root that registers independent projects claims none of their packages:
+/// they are installed on their own releases. A named project that no selected
+/// manager could hold is an error, because reporting a clean pass for it says
+/// its installs were checked when nothing was.
+pub(crate) fn identity(ctx: &ReleaseContext, selected: &[Manager]) -> Result<Identity> {
+    let root = ctx.root.as_path();
     // Detecting the tap reads the whole project, so it is left undone unless
     // brew is one of the managers this run is about.
     let homebrew = match selected.contains(&Manager::Brew) {
-        true => homebrew_target(root, &config)?,
+        true => homebrew_target(ctx)?,
         false => None,
     };
     // Resolved once: these carry the member directories that decide which path
@@ -83,10 +105,64 @@ pub fn run(
     // when cargo is not one of this run's managers, for the same reason the tap
     // above is: a manifest no selected manager needs cannot fail the run.
     let cargo = match selected.contains(&Manager::Cargo) {
-        true => targets::cargo_local_packages(root)?,
+        true => targets::cargo_local_packages(root, &crate::verify::independent_below(ctx))?,
         false => Vec::new(),
     };
-    let packages = packages(root, homebrew.as_ref(), &selected, &cargo)?;
+    // A declared target list is the whole of what the project publishes, so a
+    // registry manager is only asked about a package that list says exists.
+    let declared = |target: &str| {
+        ctx.verify_targets
+            .as_ref()
+            .is_none_or(|targets| targets.iter().any(|t| t == target))
+    };
+    let registry_selected: Vec<Manager> = selected
+        .iter()
+        .copied()
+        .filter(|manager| match manager {
+            Manager::Uv => declared("pypi"),
+            Manager::Npm => declared("npm"),
+            Manager::Cargo | Manager::Brew => true,
+        })
+        .collect();
+    let packages = packages(root, homebrew.as_ref(), &registry_selected, &cargo)?;
+    if let Some(name) = &ctx.name
+        && packages.is_empty()
+    {
+        return Err(Error::Config(format!(
+            "project '{name}' has no package for the selected managers ({})",
+            selected
+                .iter()
+                .map(|m| m.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    let owned = owned_dirs(root, &cargo);
+    Ok(Identity {
+        homebrew,
+        cargo,
+        packages,
+        owned,
+    })
+}
+
+/// Bring every local install of the selected project's package to `version`.
+pub(crate) fn run_in(
+    ctx: &ReleaseContext,
+    version: Option<&str>,
+    only: Option<&str>,
+    skip: Option<&str>,
+    dry_run: bool,
+    output: &OutputConfig,
+) -> Result<()> {
+    let version = crate::verify::resolve_version_in(ctx, version)?.to_string();
+    let selected = select_managers(only, skip)?;
+    let Identity {
+        homebrew,
+        cargo,
+        packages,
+        owned,
+    } = identity(ctx, &selected)?;
     let considered = considered(&packages);
     let mut installs: Vec<Install> = Vec::new();
     for (manager, package) in &packages {
@@ -97,7 +173,6 @@ pub fn run(
     // to run nothing is taken with the whole machine in view.
     let agent = checkers::default_agent();
     let registries = Registries::live(&agent, homebrew.as_ref());
-    let owned = owned_dirs(root, &cargo);
     let decisions: Vec<Decision> = installs
         .iter()
         .map(|install| decide(&registries, &owned, install, &version))
@@ -216,13 +291,22 @@ fn packages(
 /// no formula. Detection is `verify`'s, so a repo with no Homebrew target never
 /// probes a formula name guessed from its crate name, which could collide with
 /// an unrelated formula someone has installed.
-fn homebrew_target(root: &Path, config: &Config) -> Result<Option<(String, Vec<String>)>> {
-    let remote = crate::git::remote_url(root).unwrap_or(None);
-    let tag_only = crate::project::detect(root, config.project.project_type.as_deref())
-        .map(|p| p.publishes_only_git_tag())
-        .unwrap_or(false);
-    let detected =
-        targets::detect_targets(root, &config.verify, remote.as_deref(), tag_only, None)?;
+///
+/// A declared target list is consulted for Homebrew alone, so a target this run
+/// has no use for (a tag with no remote, say) cannot fail it.
+fn homebrew_target(ctx: &ReleaseContext) -> Result<Option<(String, Vec<String>)>> {
+    let remote = crate::git::remote_url(&ctx.repo).unwrap_or(None);
+    let detected = match &ctx.verify_targets {
+        Some(declared) if !declared.iter().any(|t| t == "homebrew") => return Ok(None),
+        Some(_) => targets::declared_targets(
+            &ctx.root,
+            &ctx.config.verify,
+            remote.as_deref(),
+            &["homebrew".to_string()],
+            ctx.name.is_some(),
+        )?,
+        None => crate::verify::project_targets(ctx, remote.as_deref(), None)?,
+    };
     Ok(detected.into_iter().find_map(|target| match target {
         Target::Homebrew { tap, formulas } => Some((tap, formulas)),
         _ => None,
@@ -696,7 +780,105 @@ fn select_managers(only: Option<&str>, skip: Option<&str>) -> Result<Vec<Manager
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::verify::fixture::{context, monorepo, write};
     use pathscan::Copy;
+
+    fn asked(ctx: &ReleaseContext, selected: &[Manager]) -> Vec<(Manager, Vec<String>)> {
+        considered(&identity(ctx, selected).unwrap().packages)
+    }
+
+    #[test]
+    fn the_root_claims_no_registered_projects_package() {
+        // packages/cli is a member of the root's Cargo workspace, so without the
+        // registry the root would rebuild and report the cli crate as its own.
+        let repo = monorepo();
+        let root = context(repo.path(), None);
+        let identity = identity(&root, &[Manager::Cargo, Manager::Uv]).unwrap();
+        assert_eq!(
+            considered(&identity.packages),
+            vec![
+                (Manager::Cargo, vec!["mono-core".to_string()]),
+                (Manager::Uv, vec!["mono".to_string()]),
+            ]
+        );
+        let cli_dir = root.root.join("packages/cli");
+        assert!(!identity.owned.contains(&cli_dir), "{:?}", identity.owned);
+        assert_eq!(
+            binary_names(&[], &identity.cargo),
+            vec!["mono-core".to_string()],
+            "the cli binary is not this project's to scan for"
+        );
+
+        // The negative control: the same workspace read without exclusions.
+        let all = targets::cargo_local_packages(&root.root, &[]).unwrap();
+        assert!(all.iter().any(|p| p.name == "mono-cli"));
+    }
+
+    #[test]
+    fn a_named_project_is_installed_under_its_own_identity() {
+        let repo = monorepo();
+        let cli = context(repo.path(), Some("cli"));
+        let identity = identity(&cli, &Manager::ALL).unwrap();
+        assert_eq!(
+            considered(&identity.packages),
+            vec![(Manager::Cargo, vec!["mono-cli".to_string()])],
+            "no root package, and no Homebrew formula inferred from the root workflow"
+        );
+        assert_eq!(identity.owned, vec![cli.root.clone()]);
+        // A path install from the root's directory belongs to the root.
+        let from_root = install(Manager::Cargo, "0.2.0", Source::Path(cli.repo.clone()));
+        assert!(matches!(
+            plan(&from_root, "0.3.0", &identity.owned),
+            Planned::Skip(_)
+        ));
+        let from_cli = install(Manager::Cargo, "0.2.0", Source::Path(cli.root.clone()));
+        assert!(matches!(
+            plan(&from_cli, "0.3.0", &identity.owned),
+            Planned::Install(_)
+        ));
+
+        let py = context(repo.path(), Some("py"));
+        assert_eq!(
+            asked(&py, &Manager::ALL),
+            vec![(Manager::Uv, vec!["mono-py".to_string()])]
+        );
+    }
+
+    #[test]
+    fn a_named_project_with_nothing_for_the_selected_managers_is_an_error() {
+        let repo = monorepo();
+        let py = context(repo.path(), Some("py"));
+        let err = identity(&py, &[Manager::Cargo, Manager::Npm])
+            .err()
+            .expect("a run that checks nothing must not pass")
+            .to_string();
+        assert!(err.contains("'py'") && err.contains("cargo, npm"), "{err}");
+
+        // A manifest the declared targets do not publish is not asked about
+        // either: cli gains a package.json but declares no npm target.
+        write(
+            &repo.path().join("packages/cli"),
+            "package.json",
+            "{\"name\": \"mono-cli\", \"version\": \"0.3.0\"}",
+        );
+        let cli = context(repo.path(), Some("cli"));
+        assert!(identity(&cli, &[Manager::Npm]).is_err());
+        write(
+            &repo.path().join("packages/cli"),
+            "vership.toml",
+            "[verify]\ntargets = [\"tag\", \"npm\"]\n",
+        );
+        let cli = context(repo.path(), Some("cli"));
+        assert_eq!(
+            asked(&cli, &[Manager::Npm]),
+            vec![(Manager::Npm, vec!["mono-cli".to_string()])]
+        );
+
+        // The root keeps its historical no-op when it publishes nothing a
+        // selected manager holds.
+        let root = context(repo.path(), None);
+        assert!(asked(&root, &[Manager::Npm]).is_empty());
+    }
 
     fn install_at(dir: PathBuf) -> Install {
         install(Manager::Cargo, "0.4.41", Source::Path(dir))

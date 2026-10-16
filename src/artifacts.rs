@@ -7,6 +7,14 @@ use crate::output;
 
 /// Run all artifact commands, returning the list of files produced (relative paths).
 pub fn run(root: &Path, entries: &[ArtifactEntry]) -> Result<Vec<PathBuf>> {
+    run_scoped(root, entries, &[])
+}
+
+pub(crate) fn run_scoped(
+    root: &Path,
+    entries: &[ArtifactEntry],
+    excluded: &[PathBuf],
+) -> Result<Vec<PathBuf>> {
     let mut produced = Vec::new();
 
     for entry in entries {
@@ -29,6 +37,7 @@ pub fn run(root: &Path, entries: &[ArtifactEntry]) -> Result<Vec<PathBuf>> {
                 )));
             }
 
+            validate_destination(root, Path::new(output_path), excluded)?;
             let dest = root.join(output_path);
             std::fs::write(&dest, &cmd_output.stdout)
                 .map_err(|e| Error::Other(format!("write {}: {e}", dest.display())))?;
@@ -50,6 +59,7 @@ pub fn run(root: &Path, entries: &[ArtifactEntry]) -> Result<Vec<PathBuf>> {
         }
 
         for file in &entry.files {
+            validate_destination(root, Path::new(file), excluded)?;
             let path = root.join(file);
             if !path.exists() {
                 return Err(Error::Other(format!(
@@ -62,4 +72,16 @@ pub fn run(root: &Path, entries: &[ArtifactEntry]) -> Result<Vec<PathBuf>> {
     }
 
     Ok(produced)
+}
+
+fn validate_destination(root: &Path, path: &Path, excluded: &[PathBuf]) -> Result<()> {
+    crate::context::ReleaseContext::contained(root, path)?;
+    let physical = crate::context::ReleaseContext::physical_path(&root.join(path))?;
+    if excluded.iter().any(|dir| physical.starts_with(dir)) {
+        return Err(Error::Config(format!(
+            "artifact destination {} belongs to another registered project",
+            path.display()
+        )));
+    }
+    Ok(())
 }

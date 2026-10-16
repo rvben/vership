@@ -15,6 +15,10 @@ pub fn generate(_cmd: &clap::Command) -> Value {
         "output": {"tty": "text", "piped": "json"},
         "global_args": [
             {
+                "name": "--project", "type": "string",
+                "description": "Select a named independent project from the repository registry. Required inside registered child directories."
+            },
+            {
                 "name": "--output",
                 "type": "string",
                 "enum": ["auto", "text", "json"],
@@ -227,6 +231,7 @@ pub fn generate(_cmd: &clap::Command) -> Value {
                     }
                 ],
                 "output_fields": [
+                    {"name": "selection", "type": "object", "description": "Resolved project, root and tag_prefix when independent projects are registered."},
                     {"name": "project_type", "type": "string"},
                     {
                         "name": "name",

@@ -16,6 +16,10 @@ pub enum OutputFormat {
 #[derive(Parser)]
 #[command(name = "vership", version, about = "Multi-target release orchestrator")]
 pub struct RuntimeCli {
+    /// Select an independently released project registered in the repository.
+    #[arg(long, global = true, value_name = "NAME")]
+    pub project: Option<String>,
+
     /// Output format: auto (default), text, or json.
     /// `auto` emits JSON when stdout is not a TTY, human-readable otherwise.
     #[arg(

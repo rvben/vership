@@ -315,6 +315,88 @@ curated = "merge"            # "merge" generated entries into curated Unreleased
                              # notes, or "replace" them with the notes
 ```
 
+## Independent projects in one repository
+
+Register each independently versioned package in the repository's root
+`vership.toml`. The existing root project keeps its `v<version>` tags and commands.
+
+```toml
+[projects.agent]
+path = "packaging/python-agent"
+tag_prefix = "shinyhub-agent-v"
+# Optional literal repository-relative files/directories used for commit history.
+# Default: the package directory. Shared paths may appear in several projects.
+paths = ["packaging/python-agent", "examples/agent", ".github/workflows/publish-agent.yml"]
+```
+
+Give the package its own `packaging/python-agent/vership.toml`:
+
+```toml
+[project]
+type = "python"
+
+[checks]
+lint_command = "uv run ruff check ."
+test_command = "uv run pytest"
+
+[verify]
+targets = ["tag", "pypi"]
+```
+
+Select the project explicitly, from anywhere inside the repository:
+
+```sh
+vership --project agent status
+vership --project agent changelog minor
+vership --project agent bump minor --dry-run
+vership --project agent bump minor --prepare
+# Review the release commit, then authorize publication:
+vership --project agent release
+vership --project agent verify
+vership --project agent update-local --dry-run
+```
+
+The repository branch and clean-index checks apply to the entire worktree.
+Manifests, checks, hooks, version-file globs, artifact paths, and `CHANGELOG.md`
+are relative to the selected package directory. Named projects inherit the root
+release branch; an explicit conflicting branch is an error. Calling a project
+command inside a registered package without `--project` is an error.
+
+A package's history includes commits that touch any of its `paths`. Root history
+excludes commits touching only registered package directories. Mixed commits and
+explicit shared paths can appear in both changelogs. Compare links use the full
+project tags, and tags are sorted by semantic version within each namespace.
+Unmerged higher tags block releases until the history is reconciled.
+
+Named projects must declare `verify.targets`: workflow inference is disabled for
+them. Supported targets are `tag`, `release`, `crates`, `pypi`, `npm`, `homebrew`,
+and `ghcr`. Registry names come from the selected manifest. Homebrew requires
+`verify.tap` and `verify.formula`; GHCR requires `verify.image`. `--targets`
+narrows this contract and rejects undeclared targets. Root verification and local
+install discovery exclude registered independent packages, even at equal versions.
+
+Preparation records the reviewed commit in a local `refs/vership/prepared/` ref
+that is never pushed. If HEAD moves afterward,
+`release` refuses to tag it. Review the new content and run `release --prepare`
+to refresh preparation for the **same version**, then `release`. Refresh updates
+the prepared section for intervening project commits and preserves its curated
+notes. An amended or rebased preparation also requires explicit refresh. Prepare
+one project at a time: a release refuses to push another project's unfinished
+release commit. Refreshing and
+retrying an unpublished local tag do not replay bump hooks or artifacts.
+Interrupted runs may resume only declared release files; foreign staged or dirty
+files are preserved and cause an error. Hook-created undeclared changes also
+stop the release before committing or pushing. An interruption before the release
+commit can replay bump hooks and artifact commands on `resume`; those commands
+must tolerate retries.
+
+Project directories must exist, remain within the repository, and cannot be
+nested or duplicated. File paths must stay within their selected project.
+Independent packages must own their workspace and lockfile; inherited Cargo,
+Node, pnpm, or uv workspace locks are unsupported. Batch releases and dependency version
+propagation between independent projects are not supported. Existing repositories
+without a registry retain their working-directory selection behavior.
+
 ## Agent Integration
 
 vership is designed to work with AI coding assistants:

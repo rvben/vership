@@ -141,6 +141,10 @@ impl ProjectType for GradleProject {
         Ok(())
     }
 
+    fn release_files(&self, root: &Path) -> Result<Vec<PathBuf>> {
+        Ok(vec![Self::resolve_source(root)?.file().into()])
+    }
+
     fn modified_files(&self) -> Vec<PathBuf> {
         self.modified_files.borrow().clone()
     }

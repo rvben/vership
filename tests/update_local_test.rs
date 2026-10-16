@@ -593,8 +593,9 @@ fn a_cargo_manifest_is_not_read_by_a_run_that_excludes_cargo() {
     let output = update_local(root.path(), home.path(), &["0.2.0", "--managers", "cargo"]);
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let manifest = root.path().canonicalize().unwrap().join("Cargo.toml");
     assert!(
-        stderr.contains("parse ./Cargo.toml"),
+        stderr.contains(&format!("parse {}", manifest.display())),
         "the control must fail on the manifest itself: {stderr}"
     );
 }

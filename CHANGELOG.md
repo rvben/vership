@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- Explicit independent projects with `--project`, per-package configuration,
+  tag namespaces, scoped changelogs, verification targets and local install identity.
+- Preparation is bound to a local commit ref. Explicit refresh preserves curated
+  notes and includes project commits added after preparation without replaying bump hooks.
+
+### Fixed
+
+- Refuse foreign release changes, cross-project path aliases, inherited workspace
+  locks and pushes that would include another project's unfinished preparation.
+- Recover interrupted secondary version files and tag-versioned Go releases;
+  update only `[project].version` in Python TOML, including single-quoted versions.
+
+### Changed
+
+- Releases require reachable namespace tags and greater semantic precedence.
+  After HEAD moves (including amend/rebase), run `release --prepare` before release.
+- Repository override environment variables (`GIT_DIR`, `GIT_WORK_TREE`, alternate
+  indexes/object directories) are rejected. Hook changes must stay within declared
+  release files. The root registry is validated when selecting a subdirectory.
+
 ## [0.5.26](https://github.com/rvben/vership/compare/v0.5.25...v0.5.26) - 2026-09-28
 
 ### Fixed

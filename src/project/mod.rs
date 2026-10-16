@@ -38,6 +38,12 @@ pub trait ProjectType {
     /// Files that were modified by write_version
     fn modified_files(&self) -> Vec<PathBuf>;
 
+    /// Files this implementation may write, available before any mutation.
+    /// Used to constrain interrupted-release recovery and validate symlinks.
+    fn release_files(&self, _root: &Path) -> Result<Vec<PathBuf>> {
+        Ok(self.modified_files())
+    }
+
     /// Human-facing package identity (e.g. an Ansible collection FQCN
     /// `namespace.name`). Surfaced in `status`. Defaults to `None` for project
     /// types whose package name is not meaningful to report.

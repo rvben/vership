@@ -223,13 +223,11 @@ pub fn replace_pyproject_version(content: &str, new_version: &Version) -> Option
         return None;
     }
 
-    let re = Regex::new(r#"(?m)^version\s*=\s*"[^"]+""#).expect("valid regex");
-    if re.is_match(content) {
-        Some(
-            re.replace(content, format!(r#"version = "{new_version}""#))
-                .to_string(),
-        )
-    } else {
-        None
-    }
+    let mut doc = content.parse::<toml_edit::DocumentMut>().ok()?;
+    let value = doc.get_mut("project")?.get_mut("version")?.as_value_mut()?;
+    value.as_str()?;
+    let decor = value.decor().clone();
+    *value = toml_edit::Value::from(new_version.to_string());
+    *value.decor_mut() = decor;
+    Some(doc.to_string())
 }

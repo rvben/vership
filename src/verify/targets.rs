@@ -156,8 +156,13 @@ pub(crate) struct CargoLocalPackage {
 ///
 /// Members are resolved the way cargo resolves them, globs and `exclude`
 /// included, so a crate cargo does not consider part of this workspace is not
-/// claimed as this project's either.
-pub(crate) fn cargo_local_packages(root: &Path) -> Result<Vec<CargoLocalPackage>> {
+/// claimed as this project's either. Nor is a member inside `excluded`: the
+/// roots of independently released projects, whose crates are theirs even when
+/// a shared workspace lists them.
+pub(crate) fn cargo_local_packages(
+    root: &Path,
+    excluded: &[PathBuf],
+) -> Result<Vec<CargoLocalPackage>> {
     let Some(manifest) = read_cargo_manifest(root)? else {
         return Ok(Vec::new());
     };
@@ -169,9 +174,12 @@ pub(crate) fn cargo_local_packages(root: &Path) -> Result<Vec<CargoLocalPackage>
     let Some(workspace) = &manifest.workspace else {
         return Ok(packages);
     };
-    let excluded = member_dirs(root, workspace.exclude.as_deref().unwrap_or(&[]));
+    let cargo_excluded = member_dirs(root, workspace.exclude.as_deref().unwrap_or(&[]));
     for dir in member_dirs(root, workspace.members.as_deref().unwrap_or(&[])) {
-        if excluded.contains(&dir) || packages.iter().any(|p: &CargoLocalPackage| p.dir == dir) {
+        if cargo_excluded.contains(&dir)
+            || is_inside(&dir, excluded)
+            || packages.iter().any(|p: &CargoLocalPackage| p.dir == dir)
+        {
             continue;
         }
         let Some(member) = read_cargo_manifest(&dir)? else {
@@ -182,6 +190,17 @@ pub(crate) fn cargo_local_packages(root: &Path) -> Result<Vec<CargoLocalPackage>
         }
     }
     Ok(packages)
+}
+
+/// Whether `dir` lies inside one of `roots`. The roots are canonical, so the
+/// directory is resolved too where it exists: a symlinked path into another
+/// project is still that project's.
+fn is_inside(dir: &Path, roots: &[PathBuf]) -> bool {
+    if roots.is_empty() {
+        return false;
+    }
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    roots.iter().any(|root| dir.starts_with(root))
 }
 
 /// Expand `members`/`exclude` patterns into directories that exist. A pattern
@@ -383,8 +402,14 @@ fn is_scannable(name: &str) -> bool {
 /// Python distributions this repo packages below its root, nearest first.
 ///
 /// The root's own manifest is not included: it is read directly, and is a
-/// target whether or not anything else says the repo publishes.
-fn packaged_distributions(root: &Path, max_depth: usize) -> Result<Vec<Distribution>> {
+/// target whether or not anything else says the repo publishes. Nothing inside
+/// `excluded` is scanned: an independently released project's distribution
+/// belongs to its own releases, whatever version it happens to carry.
+fn packaged_distributions(
+    root: &Path,
+    max_depth: usize,
+    excluded: &[PathBuf],
+) -> Result<Vec<Distribution>> {
     let mut found = Vec::new();
     let mut frontier = vec![root.to_path_buf()];
     for _ in 0..max_depth {
@@ -404,6 +429,7 @@ fn packaged_distributions(root: &Path, max_depth: usize) -> Result<Vec<Distribut
                         .and_then(|n| n.to_str())
                         .is_some_and(is_scannable)
                 })
+                .filter(|p| !is_inside(p, excluded))
                 .collect();
             dirs.sort();
             for dir in dirs {
@@ -495,6 +521,20 @@ pub fn detect_targets(
     tag_only: bool,
     version: Option<&str>,
 ) -> Result<Vec<Target>> {
+    detect_targets_excluding(root, config, remote_url, tag_only, version, &[])
+}
+
+/// [`detect_targets`] for a repository root that registers independently
+/// released projects: nothing inside `excluded` is scanned for packaged
+/// distributions.
+pub(crate) fn detect_targets_excluding(
+    root: &Path,
+    config: &VerifyConfig,
+    remote_url: Option<&str>,
+    tag_only: bool,
+    version: Option<&str>,
+    excluded: &[PathBuf],
+) -> Result<Vec<Target>> {
     let github = remote_url.and_then(owner_repo);
     let mut targets = Vec::new();
 
@@ -537,7 +577,7 @@ pub fn detect_targets(
     // checking it there reports a missing package for a correct release.
     let mut pypi: Vec<String> = pypi_project_name(root)?.into_iter().collect();
     if publishes_to_pypi(&workflows) {
-        for dist in packaged_distributions(root, PACKAGING_SCAN_DEPTH)? {
+        for dist in packaged_distributions(root, PACKAGING_SCAN_DEPTH, excluded)? {
             let belongs = match &dist.version {
                 DistVersion::FromBuild => true,
                 DistVersion::Pinned(pinned) => version == Some(pinned.as_str()),
@@ -583,41 +623,172 @@ pub fn detect_targets(
     Ok(targets)
 }
 
+/// Every target name, in the order targets are reported.
+const TARGET_NAMES: [&str; 7] = [
+    "tag", "release", "crates", "pypi", "npm", "homebrew", "ghcr",
+];
+
+pub(crate) fn known_target(name: &str) -> Result<()> {
+    if TARGET_NAMES.contains(&name) {
+        Ok(())
+    } else {
+        Err(Error::Config(format!(
+            "unknown target '{name}': valid targets are {}",
+            TARGET_NAMES.join(", ")
+        )))
+    }
+}
+
+fn parse_target_list(list: &str) -> Result<Vec<String>> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| known_target(s).map(|()| s.to_string()))
+        .collect()
+}
+
+/// Resolve a literal `verify.targets` list against the project's own
+/// manifests and configuration, with no inference from workflows and no scan
+/// below the project root.
+///
+/// Every declared target must resolve to something checkable: a declared
+/// registry whose manifest names no publishable package is a configuration
+/// error, not a target to leave out. With `require_identity`, which is how a
+/// named project in a monorepo is resolved, the repository supplies no
+/// identity either: its name is the monorepo's, not the project's, so the
+/// Homebrew tap and formula and the ghcr image must all be configured.
+/// `verify.skip` removes declared targets and must name known ones.
+pub(crate) fn declared_targets(
+    root: &Path,
+    config: &VerifyConfig,
+    remote_url: Option<&str>,
+    declared: &[String],
+    require_identity: bool,
+) -> Result<Vec<Target>> {
+    if declared.is_empty() {
+        return Err(Error::Config("verify.targets cannot be empty".to_string()));
+    }
+    for name in &config.skip {
+        known_target(name).map_err(|e| Error::Config(format!("verify.skip: {e}")))?;
+    }
+    let github = remote_url.and_then(owner_repo);
+    let missing = |what: &str| Error::Config(format!("verify target {what}"));
+    let mut seen: Vec<&str> = Vec::new();
+    let mut targets = Vec::new();
+    for name in declared {
+        known_target(name).map_err(|e| Error::Config(format!("verify.targets: {e}")))?;
+        if seen.contains(&name.as_str()) {
+            return Err(Error::Config(format!(
+                "verify.targets: duplicate target '{name}'"
+            )));
+        }
+        seen.push(name);
+        if config.skip.contains(name) {
+            continue;
+        }
+        let target = match name.as_str() {
+            "tag" => {
+                remote_url.ok_or_else(|| missing("'tag' requires an origin remote"))?;
+                Target::Tag
+            }
+            "release" => {
+                github
+                    .as_ref()
+                    .ok_or_else(|| missing("'release' requires a GitHub origin remote"))?;
+                Target::Release
+            }
+            "crates" => {
+                let cargo = cargo_identity(root)?
+                    .ok_or_else(|| missing("'crates' requires a [package] in Cargo.toml"))?;
+                if !cargo.publishable {
+                    return Err(missing(&format!(
+                        "'crates': {} is not published to crates.io",
+                        cargo.name
+                    )));
+                }
+                Target::Crates { name: cargo.name }
+            }
+            "pypi" => Target::Pypi {
+                name: pypi_project_name(root)?
+                    .ok_or_else(|| missing("'pypi' requires [project].name in pyproject.toml"))?,
+            },
+            "npm" => Target::Npm {
+                name: npm_package_name(root)?.ok_or_else(|| {
+                    missing("'npm' requires a non-private package.json with a name")
+                })?,
+            },
+            "homebrew" => {
+                let inferable = github.as_ref().filter(|_| !require_identity);
+                let tap = match (&config.tap, inferable) {
+                    (Some(tap), _) => tap.clone(),
+                    (None, Some((owner, _))) => format!("{owner}/homebrew-tap"),
+                    (None, None) => return Err(missing("'homebrew' requires verify.tap")),
+                };
+                let formulas = match (&config.formula, inferable) {
+                    (Some(formula), _) => vec![formula.clone()],
+                    (None, Some((_, repo))) => {
+                        let crate_name = cargo_identity(root)?.map(|c| c.name);
+                        formula_candidates(None, crate_name.as_deref(), repo)
+                    }
+                    (None, None) => return Err(missing("'homebrew' requires verify.formula")),
+                };
+                Target::Homebrew { tap, formulas }
+            }
+            "ghcr" => Target::Ghcr {
+                image: match (&config.image, github.as_ref().filter(|_| !require_identity)) {
+                    (Some(image), _) => image.clone(),
+                    (None, Some((owner, repo))) => format!("{owner}/{repo}").to_lowercase(),
+                    (None, None) => return Err(missing("'ghcr' requires verify.image")),
+                },
+            },
+            _ => unreachable!("known_target accepted '{name}'"),
+        };
+        targets.push(target);
+    }
+    Ok(targets)
+}
+
 /// Apply --targets / --skip CLI filters (comma-separated names).
 pub fn filter_targets(
     targets: Vec<Target>,
     only: Option<&str>,
     skip: Option<&str>,
 ) -> Result<Vec<Target>> {
-    const VALID: [&str; 7] = [
-        "tag", "release", "crates", "pypi", "npm", "homebrew", "ghcr",
-    ];
-    let parse = |list: &str| -> Result<Vec<String>> {
-        list.split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| {
-                if VALID.contains(&s) {
-                    Ok(s.to_string())
-                } else {
-                    Err(Error::Config(format!(
-                        "unknown target '{s}': valid targets are {}",
-                        VALID.join(", ")
-                    )))
-                }
-            })
-            .collect()
-    };
     let mut targets = targets;
     if let Some(only) = only {
-        let keep = parse(only)?;
+        let keep = parse_target_list(only)?;
         targets.retain(|t| keep.iter().any(|k| k == t.name()));
     }
     if let Some(skip) = skip {
-        let drop = parse(skip)?;
+        let drop = parse_target_list(skip)?;
         targets.retain(|t| !drop.iter().any(|k| k == t.name()));
     }
     Ok(targets)
+}
+
+/// [`filter_targets`] for a declared target list: `--targets` may only narrow
+/// it, so naming a target the project does not verify is an error rather than
+/// a request quietly dropped.
+pub(crate) fn narrow_targets(
+    targets: Vec<Target>,
+    only: Option<&str>,
+    skip: Option<&str>,
+) -> Result<Vec<Target>> {
+    if let Some(only) = only {
+        for name in parse_target_list(only)? {
+            if !targets.iter().any(|t| t.name() == name) {
+                return Err(Error::Config(format!(
+                    "target '{name}' is not one of this project's verify targets ({})",
+                    targets
+                        .iter()
+                        .map(Target::name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
+    }
+    filter_targets(targets, only, skip)
 }
 
 #[cfg(test)]
@@ -673,7 +844,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         manifest(tmp.path(), ".", "[package]\nname = \"rumdl\"\n");
         source(tmp.path(), ".", "main.rs");
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         assert_eq!(names(&packages), vec!["rumdl"]);
         assert_eq!(packages[0].dir, tmp.path());
         assert_eq!(
@@ -691,7 +862,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         manifest(tmp.path(), ".", "[package]\nname = \"husker-core\"\n");
         source(tmp.path(), ".", "lib.rs");
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         assert_eq!(names(&packages), vec!["husker-core"]);
         assert!(packages[0].bins.is_empty(), "got {:?}", packages[0].bins);
     }
@@ -705,7 +876,7 @@ mod tests {
         source(tmp.path(), ".", "bin/nested/main.rs");
         // Not a binary: no extension cargo builds, and no main.rs beside it.
         source(tmp.path(), ".", "bin/notes.txt");
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         assert_eq!(
             packages[0].bins,
             vec![
@@ -734,7 +905,7 @@ mod tests {
             "[package]\nname = \"husker-core\"\n",
         );
 
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         let mut found = names(&packages);
         found.sort();
         assert_eq!(found, vec!["husker", "husker-core"]);
@@ -761,7 +932,7 @@ mod tests {
             "[package]\nname = \"top\"\n\n[workspace]\nmembers = [\"sub\"]\n",
         );
         manifest(tmp.path(), "sub", "[package]\nname = \"sub\"\n");
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         let mut found = names(&packages);
         found.sort();
         assert_eq!(found, vec!["sub", "top"]);
@@ -784,7 +955,7 @@ mod tests {
             "crates/vendored",
             "[package]\nname = \"vendored\"\n",
         );
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         assert_eq!(names(&packages), vec!["mine"]);
     }
 
@@ -796,7 +967,7 @@ mod tests {
             ".",
             "[package]\nname = \"tool\"\n\n[[bin]]\nname = \"tl\"\n\n[[bin]]\nname = \"tool-lsp\"\n",
         );
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         assert_eq!(
             packages[0].bins,
             vec!["tl".to_string(), "tool-lsp".to_string()],
@@ -817,7 +988,7 @@ mod tests {
             "[package]\nname = \"tasmota-cli\"\n\n[[bin]]\nname = \"tasmota\"\npath = \"src/main.rs\"\n",
         );
         source(tmp.path(), ".", "main.rs");
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         assert_eq!(packages[0].bins, vec!["tasmota".to_string()]);
     }
 
@@ -833,7 +1004,7 @@ mod tests {
             "[package]\nname = \"shelly-cli\"\n\n[[bin]]\nname = \"shelly\"\npath = \"src/main.rs\"\n\n[[bin]]\nname = \"shelly-cli\"\npath = \"src/main.rs\"\n",
         );
         source(tmp.path(), ".", "main.rs");
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         assert_eq!(
             packages[0].bins,
             vec!["shelly".to_string(), "shelly-cli".to_string()]
@@ -853,7 +1024,7 @@ mod tests {
         );
         source(tmp.path(), ".", "main.rs");
         source(tmp.path(), ".", "bin/helper.rs");
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         assert_eq!(
             packages[0].bins,
             vec!["helper".to_string(), "tool".to_string()],
@@ -873,7 +1044,7 @@ mod tests {
             "[package]\nname = \"rumdl\"\n\n[[bin]]\nname = \"rumdl\"\npath = \"src/main.rs\"\n\n[[bin]]\nname = \"benchmark\"\npath = \"benchmark/bin/benchmark.rs\"\nrequired-features = [\"build-benchmarks\"]\n",
         );
         source(tmp.path(), ".", "main.rs");
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         assert_eq!(
             packages[0].bins,
             vec!["rumdl".to_string()],
@@ -893,7 +1064,7 @@ mod tests {
             "[package]\nname = \"rumdl\"\n\n[[bin]]\nname = \"rumdl\"\npath = \"src/main.rs\"\n\n[[bin]]\nname = \"benchmark\"\npath = \"benchmark/bin/benchmark.rs\"\n",
         );
         source(tmp.path(), ".", "main.rs");
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         assert_eq!(
             packages[0].bins,
             vec!["rumdl".to_string(), "benchmark".to_string()]
@@ -910,7 +1081,7 @@ mod tests {
         );
         source(tmp.path(), ".", "main.rs");
         source(tmp.path(), ".", "bin/helper.rs");
-        let packages = cargo_local_packages(tmp.path()).unwrap();
+        let packages = cargo_local_packages(tmp.path(), &[]).unwrap();
         assert_eq!(
             packages[0].bins,
             vec!["tl".to_string()],
@@ -921,7 +1092,7 @@ mod tests {
     #[test]
     fn a_project_with_no_cargo_manifest_yields_nothing() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(cargo_local_packages(tmp.path()).unwrap().is_empty());
+        assert!(cargo_local_packages(tmp.path(), &[]).unwrap().is_empty());
     }
 
     #[test]
@@ -931,6 +1102,6 @@ mod tests {
         // project over a directory nobody installs from.
         let tmp = tempfile::tempdir().unwrap();
         manifest(tmp.path(), ".", "[workspace]\nmembers = [\"gone/*\"]\n");
-        assert!(cargo_local_packages(tmp.path()).unwrap().is_empty());
+        assert!(cargo_local_packages(tmp.path(), &[]).unwrap().is_empty());
     }
 }

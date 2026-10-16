@@ -104,6 +104,14 @@ impl ProjectType for PythonProject {
         Ok(())
     }
 
+    fn release_files(&self, root: &Path) -> Result<Vec<PathBuf>> {
+        let mut paths = vec![PathBuf::from("pyproject.toml")];
+        if let Some(lock) = Self::detect_lockfile(root) {
+            paths.push(lock.into());
+        }
+        Ok(paths)
+    }
+
     fn modified_files(&self) -> Vec<PathBuf> {
         self.modified_files.borrow().clone()
     }

@@ -53,6 +53,10 @@ fn apply_text_mode(
     for path_result in paths {
         let path = path_result.map_err(|e| Error::Other(format!("glob error: {e}")))?;
 
+        let relative_path = path
+            .strip_prefix(root)
+            .map_err(|e| Error::Config(e.to_string()))?;
+        crate::context::ReleaseContext::contained(root, relative_path)?;
         let content = std::fs::read_to_string(&path)
             .map_err(|e| Error::Other(format!("read {}: {e}", path.display())))?;
 
@@ -86,6 +90,10 @@ fn apply_field_mode(
     for path_result in paths {
         let path = path_result.map_err(|e| Error::Other(format!("glob error: {e}")))?;
 
+        let relative_path = path
+            .strip_prefix(root)
+            .map_err(|e| Error::Config(e.to_string()))?;
+        crate::context::ReleaseContext::contained(root, relative_path)?;
         let content = std::fs::read_to_string(&path)
             .map_err(|e| Error::Other(format!("read {}: {e}", path.display())))?;
 
