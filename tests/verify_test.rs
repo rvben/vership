@@ -497,9 +497,8 @@ fn crates_found_when_exact_version_exists() {
     server.mock(|when, then| {
         when.method(GET)
             .path("/api/v1/crates/mycrate/1.2.3")
-            // crates.io rejects requests without a User-Agent; the checker
-            // must always send one.
-            .header_exists("user-agent");
+            // Identify the tool and version without account or contact details.
+            .header("user-agent", concat!("vership/", env!("CARGO_PKG_VERSION")));
         then.status(200).json_body(serde_json::json!({
             "version": {"num": "1.2.3"}
         }));

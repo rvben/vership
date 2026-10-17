@@ -7,11 +7,7 @@ pub const NPM: &str = "https://registry.npmjs.org";
 pub const RAW_GITHUB: &str = "https://raw.githubusercontent.com";
 pub const GHCR: &str = "https://ghcr.io";
 
-const USER_AGENT: &str = concat!(
-    "vership/",
-    env!("CARGO_PKG_VERSION"),
-    " (github.com/rvben/vership)"
-);
+const USER_AGENT: &str = concat!("vership/", env!("CARGO_PKG_VERSION"));
 
 pub fn default_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
