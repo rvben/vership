@@ -4,6 +4,9 @@ pub(crate) mod fixture;
 pub mod report;
 pub mod targets;
 
+#[cfg(test)]
+mod concurrency_tests;
+
 use std::path::PathBuf;
 
 use semver::Version;
@@ -123,36 +126,26 @@ pub(crate) fn run_in(
     let repo = ctx.repo.as_path();
 
     let agent = checkers::default_agent();
-    let reports: Vec<TargetReport> = targets
-        .iter()
-        .map(|target| {
-            let result = match target {
-                targets::Target::Tag => match crate::git::remote_tag_exists(repo, &tag) {
-                    Ok(true) => CheckResult::Found(tag.clone()),
-                    Ok(false) => CheckResult::NotFound,
-                    Err(e) => CheckResult::Error(e.to_string()),
-                },
-                targets::Target::Release => checkers::release(repo, &tag, &version),
-                targets::Target::Crates { name } => {
-                    checkers::crates(&agent, checkers::CRATES_IO, name, &version)
-                }
-                targets::Target::Pypi { name } => {
-                    checkers::pypi(&agent, checkers::PYPI, name, &version)
-                }
-                targets::Target::Npm { name } => {
-                    checkers::npm(&agent, checkers::NPM, name, &version)
-                }
-                targets::Target::Homebrew { tap, formulas } => {
-                    checkers::homebrew(&agent, checkers::RAW_GITHUB, tap, formulas, &version)
-                }
-                targets::Target::Ghcr { image } => {
-                    let cred = checkers::resolve_ghcr_credential();
-                    checkers::ghcr(&agent, checkers::GHCR, image, &version, cred.as_ref())
-                }
-            };
-            TargetReport::from_result(target.name(), result)
-        })
-        .collect();
+    let reports = check_targets(&targets, |target| match target {
+        targets::Target::Tag => match crate::git::remote_tag_exists(repo, &tag) {
+            Ok(true) => CheckResult::Found(tag.clone()),
+            Ok(false) => CheckResult::NotFound,
+            Err(e) => CheckResult::Error(e.to_string()),
+        },
+        targets::Target::Release => checkers::release(repo, &tag, &version),
+        targets::Target::Crates { name } => {
+            checkers::crates(&agent, checkers::CRATES_IO, name, &version)
+        }
+        targets::Target::Pypi { name } => checkers::pypi(&agent, checkers::PYPI, name, &version),
+        targets::Target::Npm { name } => checkers::npm(&agent, checkers::NPM, name, &version),
+        targets::Target::Homebrew { tap, formulas } => {
+            checkers::homebrew(&agent, checkers::RAW_GITHUB, tap, formulas, &version)
+        }
+        targets::Target::Ghcr { image } => {
+            let cred = checkers::resolve_ghcr_credential();
+            checkers::ghcr(&agent, checkers::GHCR, image, &version, cred.as_ref())
+        }
+    });
 
     report::render(&version, &reports, output);
 
@@ -169,6 +162,46 @@ pub(crate) fn run_in(
             failed.join(", ")
         )))
     }
+}
+
+// Target checks are independent read-only operations. Bound threads even when
+// a release has many packages, and restore plan order before rendering results.
+const MAX_VERIFY_WORKERS: usize = 4;
+
+fn check_targets(
+    targets: &[targets::Target],
+    check: impl Fn(&targets::Target) -> CheckResult + Sync,
+) -> Vec<TargetReport> {
+    if targets.len() <= 1 {
+        return targets
+            .iter()
+            .map(|t| TargetReport::from_result(t.name(), check(t)))
+            .collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut reports = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..targets.len().min(MAX_VERIFY_WORKERS))
+            .map(|_| {
+                let next = &next;
+                let check = &check;
+                scope.spawn(move || {
+                    let mut reports = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(target) = targets.get(i) else { break };
+                        reports.push((i, TargetReport::from_result(target.name(), check(target))));
+                    }
+                    reports
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().expect("verification worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    reports.sort_unstable_by_key(|(i, _)| *i);
+    reports.into_iter().map(|(_, report)| report).collect()
 }
 
 /// The version to verify for the selected project.
