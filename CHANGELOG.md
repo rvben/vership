@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.28](https://github.com/rvben/vership/compare/v0.5.27...v0.5.28) - 2026-10-17
+
+### Performance
+
+- **verify**: check publication targets concurrently ([350f753](https://github.com/rvben/vership/commit/350f753cf8cb02c98843a42d35219ca449a756e0))
+
 ## [0.5.27](https://github.com/rvben/vership/compare/v0.5.26...v0.5.27) - 2026-10-16
 
 ### Added
