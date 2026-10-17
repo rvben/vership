@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.29](https://github.com/rvben/vership/compare/v0.5.28...v0.5.29) - 2026-10-17
+
+### Fixed
+
+- **http**: use generic verification request identification ([4c5ed61](https://github.com/rvben/vership/commit/4c5ed612e5d974fac367603df058b5f111209672))
+
 ## [0.5.28](https://github.com/rvben/vership/compare/v0.5.27...v0.5.28) - 2026-10-17
 
 ### Performance
