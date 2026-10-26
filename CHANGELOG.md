@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.30](https://github.com/rvben/vership/compare/v0.5.29...v0.5.30) - 2026-10-26
+
+### Fixed
+
+- **homebrew**: verify the stable package version ([d920d8a](https://github.com/rvben/vership/commit/d920d8ab7f62e702ac6b5dda6c46e36ddbc017a1))
+
 ## [0.5.29](https://github.com/rvben/vership/compare/v0.5.28...v0.5.29) - 2026-10-17
 
 ### Fixed
