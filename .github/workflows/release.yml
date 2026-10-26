@@ -232,98 +232,13 @@ jobs:
             --generate-notes \
             /tmp/artifacts/build-*/*.tar.gz \
             /tmp/artifacts/build-*/*.sha256
+          {
+            echo '### Homebrew'
+            echo 'The shared tap updater prepares formula changes on its daily schedule or a manual run.'
+            echo '[Run Update published releases](https://github.com/rvben/homebrew-tap/actions/workflows/update.yml), then review and integrate its branch after native CI passes.'
+          } >> "$GITHUB_STEP_SUMMARY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  update-homebrew:
-    timeout-minutes: 15
-    needs: release
-    if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          path: /tmp/artifacts
-
-      - name: Compute SHA256 hashes
-        id: hashes
-        run: |
-          set -o pipefail
-          for target in x86_64-apple-darwin aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-            sha=$(awk '{print $1}' "/tmp/artifacts/build-${target}/vership-${GITHUB_REF_NAME}-${target}.tar.gz.sha256")
-            key=$(echo "${target}" | tr '-' '_')
-            echo "${key}=${sha}" >> "$GITHUB_OUTPUT"
-          done
-
-      - name: Update Homebrew formula
-        env:
-          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
-        run: |
-          # Authenticate to the tap with a write deploy key. The key never
-          # expires and is scoped to rvben/homebrew-tap only, so cross-repo
-          # pushes keep working without periodic token rotation.
-          mkdir -p ~/.ssh
-          echo "$HOMEBREW_TAP_DEPLOY_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
-
-          VERSION="$GITHUB_REF_NAME"
-          VERSION_NUM="${VERSION#v}"
-
-          cat > /tmp/vership.rb << 'FORMULA'
-          class Vership < Formula
-            desc "Multi-target release orchestrator"
-            homepage "https://github.com/rvben/vership"
-            version "VERSION_NUM"
-            license "MIT"
-
-            on_macos do
-              if Hardware::CPU.arm?
-                url "https://github.com/rvben/vership/releases/download/VERSION/vership-VERSION-aarch64-apple-darwin.tar.gz"
-                sha256 "SHA_AARCH64_APPLE_DARWIN"
-              else
-                url "https://github.com/rvben/vership/releases/download/VERSION/vership-VERSION-x86_64-apple-darwin.tar.gz"
-                sha256 "SHA_X86_64_APPLE_DARWIN"
-              end
-            end
-
-            on_linux do
-              if Hardware::CPU.arm?
-                url "https://github.com/rvben/vership/releases/download/VERSION/vership-VERSION-aarch64-unknown-linux-gnu.tar.gz"
-                sha256 "SHA_AARCH64_UNKNOWN_LINUX_GNU"
-              else
-                url "https://github.com/rvben/vership/releases/download/VERSION/vership-VERSION-x86_64-unknown-linux-gnu.tar.gz"
-                sha256 "SHA_X86_64_UNKNOWN_LINUX_GNU"
-              end
-            end
-
-            def install
-              bin.install "vership"
-            end
-
-            test do
-              system "#{bin}/vership", "--version"
-            end
-          end
-          FORMULA
-
-          sed -i "s/VERSION_NUM/${VERSION_NUM}/g" /tmp/vership.rb
-          sed -i "s/VERSION/${VERSION}/g" /tmp/vership.rb
-          sed -i "s/SHA_AARCH64_APPLE_DARWIN/${{ steps.hashes.outputs.aarch64_apple_darwin }}/g" /tmp/vership.rb
-          sed -i "s/SHA_X86_64_APPLE_DARWIN/${{ steps.hashes.outputs.x86_64_apple_darwin }}/g" /tmp/vership.rb
-          sed -i "s/SHA_AARCH64_UNKNOWN_LINUX_GNU/${{ steps.hashes.outputs.aarch64_unknown_linux_gnu }}/g" /tmp/vership.rb
-          sed -i "s/SHA_X86_64_UNKNOWN_LINUX_GNU/${{ steps.hashes.outputs.x86_64_unknown_linux_gnu }}/g" /tmp/vership.rb
-
-          # Clone tap repo, update formula, push
-          git clone git@github.com:rvben/homebrew-tap.git /tmp/tap
-          mkdir -p /tmp/tap/Formula
-          cp /tmp/vership.rb /tmp/tap/Formula/vership.rb
-          cd /tmp/tap
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/vership.rb
-          git diff --cached --quiet || git commit -m "Update vership to ${VERSION}"
-          git push
 
   attest-release:
     timeout-minutes: 15

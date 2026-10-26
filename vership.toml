@@ -8,3 +8,7 @@ unconventional = "exclude"
 lint = false
 tests = true
 test_command = "make check"
+
+[verify]
+tap = "rvben/homebrew-tap"
+formula = "vership"

@@ -8,14 +8,6 @@
       "context": "4c515a46409aa175",
       "occurrence": 0,
       "message": "\"uv publish\" publishes to PyPI with the long-lived credential UV_PUBLISH_TOKEN, although the job can request an OIDC token (\"id-token: write\"). prefer trusted publishing with pypa/gh-action-pypi-publish and the permission \"id-token: write\""
-    },
-    {
-      "file": ".github/workflows/release.yml",
-      "rule": "insecure-ssh-keyscan",
-      "fingerprint": "5cf20e679a70cbdd",
-      "context": "cd8d3b634525a230",
-      "occurrence": 0,
-      "message": "\"ssh-keyscan\" writes the host key it receives to \"~/.ssh/known_hosts\", so the key of whoever answers the connection is trusted (trust on first use), and an attacker on the path to the server can take it over for every later ssh, scp or rsync. store the verified host key in a secret or variable and write that to the known_hosts file instead"
     }
   ]
 }
