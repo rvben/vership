@@ -102,9 +102,8 @@ pub fn npm(agent: &ureq::Agent, base: &str, name: &str, version: &str) -> CheckR
     })
 }
 
-/// Homebrew tap: fetch the formula file and look for the version string.
-/// Found when the exact version appears; FoundOld when another
-/// `version "x.y.z"` or `/vx.y.z/` marker appears instead.
+/// Homebrew tap: compare the formula's stable package version, excluding
+/// dependencies and other unrelated text in the formula.
 pub fn homebrew(
     agent: &ureq::Agent,
     raw_base: &str,
@@ -112,20 +111,13 @@ pub fn homebrew(
     formulas: &[String],
     version: &str,
 ) -> CheckResult {
-    // Digit boundaries so 1.2.3 never matches inside v1.2.30 or 11.2.3.
-    let exact = regex::Regex::new(&format!(
-        r"(?:^|[^\d]){}(?:[^\d]|$)",
-        regex::escape(version)
-    ))
-    .expect("valid regex");
-    let any_version =
-        regex::Regex::new(r#"(?:version\s+"|/v)(\d+\.\d+(?:\.\d+)*)"#).expect("valid regex");
-
     // The formula is conventionally named after the binary, which may differ
     // from the repo name. Probe each candidate; an exact match on any wins, a
-    // stale version on the first existing formula is reported, and only if none
-    // of the candidates exist do we report NotFound.
+    // parse error outranks a stale version, because an unreadable candidate
+    // cannot confirm publication. Otherwise report the first stale version,
+    // or NotFound when no candidate exists.
     let mut found_old: Option<String> = None;
+    let mut parse_error = None;
     for formula in formulas {
         let url = format!("{raw_base}/{tap}/HEAD/Formula/{formula}.rb");
         let body = match agent.get(&url).set("User-Agent", USER_AGENT).call() {
@@ -139,14 +131,18 @@ pub fn homebrew(
             }
             Err(e) => return CheckResult::Error(e.to_string()),
         };
-        if exact.is_match(&body) {
-            return CheckResult::Found(version.to_string());
+        match super::homebrew::formula_version(&body) {
+            Ok(found) if found == version => return CheckResult::Found(found),
+            Ok(found) => {
+                found_old.get_or_insert(found);
+            }
+            Err(detail) => {
+                parse_error.get_or_insert(format!("parse formula {formula}: {detail}"));
+            }
         }
-        if found_old.is_none()
-            && let Some(captures) = any_version.captures(&body)
-        {
-            found_old = Some(captures[1].to_string());
-        }
+    }
+    if let Some(detail) = parse_error {
+        return CheckResult::Error(detail);
     }
     match found_old {
         Some(v) => CheckResult::FoundOld(v),

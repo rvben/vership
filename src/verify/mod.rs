@@ -1,6 +1,7 @@
 pub mod checkers;
 #[cfg(test)]
 pub(crate) mod fixture;
+mod homebrew;
 pub mod report;
 pub mod targets;
 

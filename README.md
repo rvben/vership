@@ -161,6 +161,8 @@ formula = "name"               # default: repo name
 image = "owner/name"           # default: owner/repo lowercased
 ```
 
+Homebrew verification reads the formula's stable package version from static `version`, source URL, or Git tag declarations. Dependency versions and comments are ignored; conflicting platform versions or unsupported dynamic declarations produce an error. Formulas with ambiguous download names can declare an explicit `version`.
+
 Exit codes: 0 when every target passes; 8 (`unpublished`, retryable) when anything is missing, version-mismatched, or errored. Publishing may still be in flight, so 8 is a state, not a failure. To block until a release is fully live, compose with [tarry](https://github.com/rvben/tarry):
 
 ```sh

@@ -748,6 +748,193 @@ fn homebrew_missing_formula_is_not_found() {
 }
 
 #[test]
+fn homebrew_uses_the_package_version_not_unrelated_formula_text() {
+    let cases = [
+        (
+            "pypi source and nested resource",
+            r#"class Mytool < Formula
+  url "https://files.pythonhosted.org/packages/abc/mytool-0.2.0.tar.gz"
+  resource "playwright" do
+    version "1.64.1"
+    on_macos do
+      url "https://example.test/playwright-1.64.1.whl"
+    end
+  end
+end"#,
+            "0.2.1",
+            CheckResult::FoundOld("0.2.0".into()),
+        ),
+        (
+            "resource is not a published package version",
+            "  url \"https://example.test/mytool-0.2.0.tar.gz\"\n  resource \"dep\" do\n    version \"1.64.1\"\n  end\n",
+            "1.64.1",
+            CheckResult::FoundOld("0.2.0".into()),
+        ),
+        (
+            "comments, homepage, and checksums are not source versions",
+            "  # version \"0.2.1\"\n  homepage \"https://example.test/v0.2.1/\"\n  url \"https://example.test/mytool-0.2.0.tar.gz\"\n  sha256 \"0.2.1\"\n",
+            "0.2.1",
+            CheckResult::FoundOld("0.2.0".into()),
+        ),
+        (
+            "explicit version takes precedence over source filename",
+            "  url \"https://example.test/mytool-0.2.0.tar.gz\"\n  version '0.2.1'\n",
+            "0.2.1",
+            CheckResult::Found("0.2.1".into()),
+        ),
+        (
+            "explicit version also prevents a stale source match",
+            "  version \"0.2.1\"\n  url \"https://example.test/mytool-0.2.0.tar.gz\"\n",
+            "0.2.0",
+            CheckResult::FoundOld("0.2.1".into()),
+        ),
+        (
+            "stable block excludes head, bottle, and method bodies",
+            "  head do\n    url \"https://example.test/v0.2.1/src.tar.gz\"\n  end\n  bottle do\n    version \"0.2.1\"\n  end\n  stable do\n    url \"https://example.test/mytool-0.2.0.tar.gz\"\n  end\n  def install\n    url \"https://example.test/v0.2.1/src.tar.gz\"\n  end\n",
+            "0.2.1",
+            CheckResult::FoundOld("0.2.0".into()),
+        ),
+        (
+            "platform source URLs agree",
+            "  on_macos do\n    url \"https://example.test/v0.2.1/mac.tar.gz\"\n  end\n  on_linux do\n    url \"https://example.test/v0.2.1/linux.tar.gz\"\n  end\n",
+            "0.2.1",
+            CheckResult::Found("0.2.1".into()),
+        ),
+        (
+            "prerelease tag retains its suffix",
+            "  url \"https://example.test/archive/refs/tags/v0.2.1-rc.1.tar.gz\"\n",
+            "0.2.1",
+            CheckResult::FoundOld("0.2.1-rc.1".into()),
+        ),
+        (
+            "source filename is more precise than directory series",
+            "  url \"https://download.gnome.org/sources/glib/2.78/glib-2.78.3.tar.xz\"\n",
+            "2.78",
+            CheckResult::FoundOld("2.78.3".into()),
+        ),
+        (
+            "git tag supplies the source version",
+            "  url \"https://github.com/o/r.git\", tag: \"v1.2.3\", revision: \"abc123\"\n",
+            "1.2.3",
+            CheckResult::Found("1.2.3".into()),
+        ),
+        (
+            "multiline git source arguments",
+            "  url \"https://github.com/o/r.git\",\n      tag: \"v1.2.3\",\n      revision: \"abc123\"\n",
+            "1.2.3",
+            CheckResult::Found("1.2.3".into()),
+        ),
+        (
+            "heredoc text is not stable metadata",
+            "  desc <<~TEXT\n    version \"1.2.3\"\n  TEXT\n  url \"https://example.test/tool-1.2.2.tar.gz\"\n",
+            "1.2.3",
+            CheckResult::FoundOld("1.2.2".into()),
+        ),
+        (
+            "excluded methods still track flush-left heredocs",
+            "  url \"https://example.test/tool-1.2.2.tar.gz\"\n  def install\n    text = <<-EOS\nversion '1.2.3'\nEOS\n  end\n",
+            "1.2.3",
+            CheckResult::FoundOld("1.2.2".into()),
+        ),
+        (
+            "quoted shift text is not a heredoc opener",
+            "  desc \"maps << to >>\"\n  url \"https://example.test/tool-1.2.3.tar.gz\"\n",
+            "1.2.3",
+            CheckResult::Found("1.2.3".into()),
+        ),
+        (
+            "patch data cannot declare a version",
+            "  url \"https://example.test/tool-1.2.2.tar.gz\"\n__END__\n version '1.2.3'\n",
+            "1.2.3",
+            CheckResult::FoundOld("1.2.2".into()),
+        ),
+        (
+            "scoped version applies to its platform only",
+            "  on_macos do\n    url \"https://example.test/mac.zip\"\n    version \"1.2.3\"\n  end\n  on_linux do\n    url \"https://example.test/tool-1.2.3.tar.gz\"\n  end\n",
+            "1.2.3",
+            CheckResult::Found("1.2.3".into()),
+        ),
+        (
+            "tar lz source filename is more precise than series directory",
+            "  url \"https://example.test/gnu/foo/1.2/foo-1.2.3.tar.lz\"\n",
+            "1.2",
+            CheckResult::FoundOld("1.2.3".into()),
+        ),
+        (
+            "explicit version normalizes a leading v",
+            "  version \"v1.2.3\"\n  url \"https://example.test/mac.zip\"\n",
+            "1.2.3",
+            CheckResult::Found("1.2.3".into()),
+        ),
+        (
+            "release tag excludes platform suffixes",
+            "  url \"https://example.test/v1.2.3/tool-1.2.3-darwin-arm64.tar.gz\"\n",
+            "1.2.3",
+            CheckResult::Found("1.2.3".into()),
+        ),
+        (
+            "inline comments cannot provide git tags",
+            "  url \"https://example.test/tool-1.2.2.tar.gz\" # , tag: \"v1.2.3\"\n",
+            "1.2.3",
+            CheckResult::FoundOld("1.2.2".into()),
+        ),
+    ];
+    let server = MockServer::start();
+    for (index, (name, body, requested, expected)) in cases.into_iter().enumerate() {
+        let formula = format!("case-{index}");
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path(format!("/tap/HEAD/Formula/{formula}.rb"));
+            then.status(200).body(body);
+        });
+        assert_eq!(
+            checkers::homebrew(&agent(), &server.base_url(), "tap", &[formula], requested),
+            expected,
+            "{name}"
+        );
+        mock.assert();
+    }
+}
+
+#[test]
+fn homebrew_cannot_confirm_unknown_or_conflicting_source_versions() {
+    let server = MockServer::start();
+    for (index, body) in [
+        "  url \"https://example.test/download/latest\"\n  resource \"dep\" do\n    version \"1.2.3\"\n  end\n",
+        "  url \"https://example.test/mytool-#{release}.tar.gz\"\n",
+        "  url \"https://example.test/mytool-1.2.3-linux-arm64.tar.gz\"\n",
+        "  url \"https://github.com/o/r.git\", tag: \"v#{release}\"\n",
+        "  on_macos do\n    url \"https://example.test/mac.zip\"\n    version \"1.2.3\"\n  end\n  on_linux do\n    url \"https://example.test/tool-1.2.2.tar.gz\"\n  end\n",
+        "  url \"https://example.test/llvmorg-17.0.6/clang+llvm-17.0.6-x86_64-linux-gnu-ubuntu-22.04.tar.xz\"\n",
+        "  url \"https://example.test/1.2/tool-1.2.3.weird\"\n",
+        "  on_macos do # arm only\n    url \"https://example.test/mac.zip\"\n    version \"1.2.3\"\n  end\n  on_linux do\n    url \"https://example.test/tool-1.2.2.tar.gz\"\n  end\n",
+        "  if Hardware::CPU.arm?\n    url \"https://example.test/tool-1.2.2.tar.gz\"\n  else # intel\n    url \"https://example.test/intel.zip\"\n    version \"1.2.3\"\n  end\n",
+        "  url \"https://example.test/tool-1.2.2.tar.gz\"\n  version \"1.2.3\" if Hardware::CPU.arm?\n",
+        "  url \"https://example.test/tool-1.2.3.tar.gz\" if OS.mac?\n",
+        "  url \"https://example.test/tool-1.2.3.tar.gz\", using: :nounzip if OS.mac?\n",
+        "  url \"https://example.test/tool-1.2.3.tar.gz\"\n  version Mytool::VERSION\n",
+        "  url \"https://example.test/tool-1.2.3.tar.gz\"\n  version(\"1.2.3\")\n",
+        "  version \"1.2.3\"\n  url MAC_URL\n",
+        "  url \"https://example.test/tool-1.2.3.tar.gz\"\n  def install\n    foo(<<~A, <<~B)\n  end\n",
+        "  url \"https://example.test/v1.2.3/tool.tar.gz\", tag: OTHER_TAG\n",
+        "  url \"https://github.com/o/r.git\", tag: \"v1.2.3\".sub('3', '2')\n",
+        "  url \"https://github.com/o/r.git\",\n      tag: \"v1.2.3\" if OS.mac?\n",
+        "  url \"https://example.test/tool-1.2.3.tar.gz\"\n  version <<~EOS\n1.2.4\nEOS\n",
+        "  url \"https://example.test/tool-1.2.3.tar.gz\"\n  flags <<CFLAGS\n",
+        "  on_macos do\n    url \"https://example.test/v1.2.3/mac.tar.gz\"\n  end\n  on_linux do\n    url \"https://example.test/v1.2.2/linux.tar.gz\"\n  end\n",
+    ].into_iter().enumerate() {
+        let formula = format!("unknown-{index}");
+        let mock = server.mock(|when, then| {
+            when.method(GET).path(format!("/tap/HEAD/Formula/{formula}.rb"));
+            then.status(200).body(body);
+        });
+        let result = checkers::homebrew(&agent(), &server.base_url(), "tap", &[formula], "1.2.3");
+        assert!(matches!(result, CheckResult::Error(_)), "{result:?}");
+        mock.assert();
+    }
+}
+
+#[test]
 fn ghcr_found_when_tag_manifest_exists() {
     let server = MockServer::start();
     server.mock(|when, then| {
