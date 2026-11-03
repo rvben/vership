@@ -1,0 +1,31 @@
+name: Review upd proposal
+
+on:
+  # The pinned observer checks trusted run provenance, artifact digests and exact
+  # GitHub blob changes; it never checks out or executes repository code.
+  workflow_run: # jactionlint ignore=dangerous-triggers
+    workflows: [Dependency health]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+  # Required only to submit the verified commit-bound approval; no repository code runs.
+  pull-requests: write # jactionlint ignore=excessive-permissions
+
+# Distinct from the shared reviewer/publisher lock in the reusable workflow.
+concurrency:
+  group: upd-review-caller-${{ github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    uses: rvben/upd/.github/workflows/review-dependencies.yml@c4c07ab66084ea6484dc76e9bc2f7875933d12fb # v0.18.3
+    with:
+      publisher-bot-id: 322216747
+      allowed-paths: >-
+        .github/workflows/*.yaml
+        .github/workflows/*.yml
+        Cargo.lock
+        Cargo.toml
