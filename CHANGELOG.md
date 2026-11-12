@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.31](https://github.com/rvben/vership/compare/v0.5.30...v0.5.31) - 2026-11-12
+
+### Fixed
+
+- **verify**: only count packaging manifests git tracks as PyPI targets ([8f1c8ee](https://github.com/rvben/vership/commit/8f1c8ee38bba91f32c18f20af9764c43e457a314))
+
 ## [0.5.30](https://github.com/rvben/vership/compare/v0.5.29...v0.5.30) - 2026-10-26
 
 ### Fixed
