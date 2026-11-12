@@ -405,11 +405,18 @@ fn is_scannable(name: &str) -> bool {
 /// target whether or not anything else says the repo publishes. Nothing inside
 /// `excluded` is scanned: an independently released project's distribution
 /// belongs to its own releases, whatever version it happens to carry.
+///
+/// In a git checkout only manifests git tracks count. A release publishes what
+/// the repository holds, so a scratch project in the working tree (ignored, not
+/// yet added, or reached through a symlink into another project) is published
+/// by nothing. Outside a checkout there is no such record and every manifest
+/// counts.
 fn packaged_distributions(
     root: &Path,
     max_depth: usize,
     excluded: &[PathBuf],
 ) -> Result<Vec<Distribution>> {
+    let tracked_only = crate::git::is_work_tree(root).unwrap_or(false);
     let mut found = Vec::new();
     let mut frontier = vec![root.to_path_buf()];
     for _ in 0..max_depth {
@@ -433,7 +440,12 @@ fn packaged_distributions(
                 .collect();
             dirs.sort();
             for dir in dirs {
-                if let Some(dist) = read_distribution(&dir.join("pyproject.toml"))? {
+                let manifest = dir.join("pyproject.toml");
+                let ours = !tracked_only
+                    || manifest
+                        .strip_prefix(root)
+                        .is_ok_and(|rel| crate::git::is_tracked(root, rel).unwrap_or(false));
+                if ours && let Some(dist) = read_distribution(&manifest)? {
                     found.push(dist);
                 }
                 next.push(dir);

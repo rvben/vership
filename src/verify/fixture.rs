@@ -130,6 +130,8 @@ pub(crate) fn monorepo() -> TempDir {
         "packages/py/pyproject.toml",
         "[project]\nname = \"mono-py\"\nversion = \"1.0.0\"\n",
     );
+    // Detection reads what git tracks, as a release does.
+    git(root, &["add", "."]);
     tmp
 }
 

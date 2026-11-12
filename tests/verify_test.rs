@@ -1131,3 +1131,78 @@ fn homebrew_version_substring_of_newer_version_is_found_old() {
     );
     assert_eq!(result, CheckResult::FoundOld("1.2.30".to_string()));
 }
+
+fn git(dir: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("git runs");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The subdirectory-wheel repo as a real git checkout with its files tracked.
+fn tracked_wheel_repo(dir: &Path) {
+    git(dir, &["init", "-q"]);
+    wheel_from_subdirectory(dir);
+    git(dir, &["add", "."]);
+}
+
+fn pypi_names(dir: &Path) -> Vec<String> {
+    detect_targets(
+        dir,
+        &VerifyConfig::default(),
+        Some("https://github.com/rvben/mytool"),
+        false,
+        Some("1.2.3"),
+    )
+    .unwrap()
+    .into_iter()
+    .filter_map(|t| match t {
+        Target::Pypi { name } => Some(name),
+        _ => None,
+    })
+    .collect()
+}
+
+#[test]
+fn an_untracked_manifest_in_a_checkout_is_not_a_release_target() {
+    // A release publishes what git holds. A scratch project sitting in the
+    // working tree, ignored or merely not added, is published by nothing, and
+    // checking it reports a missing package for a correct release.
+    let dir = tempfile::tempdir().unwrap();
+    tracked_wheel_repo(dir.path());
+    write(
+        dir.path(),
+        "prototypes/scratch/pyproject.toml",
+        "[project]\nname = \"scratch\"\ndynamic = [\"version\"]\n",
+    );
+    assert_eq!(pypi_names(dir.path()), vec!["mytool"]);
+
+    // The control on the same tree: once git tracks it, it is this repo's.
+    git(dir.path(), &["add", "prototypes/scratch/pyproject.toml"]);
+    assert_eq!(pypi_names(dir.path()), vec!["mytool", "scratch"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_to_another_project_is_not_a_release_target() {
+    // A symlinked directory resolves into a different project's tree. Git can
+    // track the link itself, never the manifest behind it.
+    let dir = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    tracked_wheel_repo(dir.path());
+    write(
+        elsewhere.path(),
+        "pyproject.toml",
+        "[project]\nname = \"elsewhere\"\ndynamic = [\"version\"]\n",
+    );
+    fs::create_dir_all(dir.path().join("prototypes")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), dir.path().join("prototypes/linked")).unwrap();
+    git(dir.path(), &["add", "prototypes/linked"]);
+    assert_eq!(pypi_names(dir.path()), vec!["mytool"]);
+}

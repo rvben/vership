@@ -129,6 +129,21 @@ pub fn has_tracked_changes(root: &Path) -> Result<bool> {
     Ok(has_staged || has_unstaged)
 }
 
+/// Whether `root` is inside a git work tree.
+pub fn is_work_tree(root: &Path) -> Result<bool> {
+    git_success(root, &["rev-parse", "--is-inside-work-tree"])
+}
+
+/// Whether git tracks the file at `path`, given relative to `root`. A path
+/// behind a symlinked directory is never tracked: git holds the link, not what
+/// it points at.
+pub fn is_tracked(root: &Path, path: &Path) -> Result<bool> {
+    let Some(path) = path.to_str() else {
+        return Ok(false);
+    };
+    git_success(root, &["ls-files", "--error-unmatch", "--", path])
+}
+
 /// Return untracked, non-ignored paths relative to the repository root.
 pub fn untracked_files(root: &Path) -> Result<Vec<String>> {
     let output = Command::new("git")
