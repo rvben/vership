@@ -24,8 +24,8 @@ jobs:
       min-age: 7d
       max-bump: minor
       prepare-command: >-
-        rustup toolchain install 1.96.0 --profile minimal --component clippy,rustfmt &&
-        rustup default 1.96.0 &&
+        rustup toolchain install 1.100.0 --profile minimal --component clippy,rustfmt &&
+        rustup default 1.100.0 &&
         go install github.com/jdx/jactionlint/v2/cmd/jactionlint@v2.1.0 &&
         echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       # Use the repository validator, which supports release concurrency.queue.
