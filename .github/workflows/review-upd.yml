@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   review:
-    uses: rvben/upd/.github/workflows/review-dependencies.yml@c4c07ab66084ea6484dc76e9bc2f7875933d12fb # v0.18.3
+    uses: rvben/upd/.github/workflows/review-dependencies.yml@e43776bc09ba8dfd7f0e6108eaf37c153b061ada # v0.18.4
     with:
       publisher-bot-id: 322216747
       allowed-paths: >-
