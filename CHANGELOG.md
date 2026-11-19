@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.5.32](https://github.com/rvben/vership/compare/v0.5.31...v0.5.32) - 2026-11-19
+
+### Added
+
+- **config**: let the root project choose its release tag prefix ([b5e879c](https://github.com/rvben/vership/commit/b5e879c01e624177e6c2156fd641d578ae628511))
+
 ## [0.5.31](https://github.com/rvben/vership/compare/v0.5.30...v0.5.31) - 2026-11-12
 
 ### Fixed
