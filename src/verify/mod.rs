@@ -213,12 +213,23 @@ fn check_targets(
 /// falling back to the latest tag in the project's namespace.
 pub(crate) fn resolve_version_in(ctx: &ReleaseContext, explicit: Option<&str>) -> Result<Version> {
     if let Some(text) = explicit {
-        let bare = text
-            .strip_prefix(ctx.prefix.as_str())
-            .or_else(|| text.strip_prefix('v'))
-            .unwrap_or(text);
-        return Version::parse(bare)
-            .map_err(|e| Error::Version(format!("invalid version '{text}': {e}")));
+        // Bare first: a prefix may be empty, or start with characters that a
+        // version can also start with, and must not eat part of a bare version.
+        let spellings = [
+            Some(text),
+            text.strip_prefix(ctx.prefix.as_str()),
+            text.strip_prefix('v'),
+        ];
+        return match spellings
+            .into_iter()
+            .flatten()
+            .find_map(|spelling| Version::parse(spelling).ok())
+        {
+            Some(version) => Ok(version),
+            None => Err(Error::Version(format!(
+                "invalid version '{text}': expected a semantic version, bare or as a release tag"
+            ))),
+        };
     }
     let project_type = ctx.config.project.project_type.as_deref();
     if let Ok(project) = crate::project::detect(&ctx.root, project_type)

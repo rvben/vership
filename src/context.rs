@@ -68,6 +68,48 @@ fn read_config(path: &Path) -> Result<toml::Value> {
     }
 }
 
+/// The `[project] tag_prefix` a config file sets, if it sets one.
+fn configured_prefix(value: &toml::Value) -> Result<Option<String>> {
+    match value.get("project").and_then(|p| p.get("tag_prefix")) {
+        None => Ok(None),
+        Some(toml::Value::String(prefix)) => Ok(Some(prefix.clone())),
+        Some(_) => Err(config_error("project.tag_prefix must be a string")),
+    }
+}
+
+/// Whether `<prefix><version>` names a tag: the prefix starts with a letter or
+/// digit, stays within characters that need no quoting, and forms a valid ref.
+fn usable_prefix(repo: &Path, prefix: &str) -> Result<bool> {
+    Ok(prefix
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+        && prefix
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+        && git::valid_tag(repo, &format!("{prefix}0.0.0"))?)
+}
+
+/// The tag prefix of the project that `value` configures as a root project:
+/// `v` unless `[project] tag_prefix` says otherwise. Empty is allowed there and
+/// tags releases with the bare version.
+fn root_prefix(repo: &Path, value: &toml::Value) -> Result<String> {
+    let Some(prefix) = configured_prefix(value)? else {
+        return Ok("v".into());
+    };
+    // A prefix such as `1` or `1.2.3-` would make every tag read as a version
+    // of its own, so a tag and a version could no longer be told apart.
+    let tags_read_as_versions = ["0.0.0", "1.0.0"]
+        .iter()
+        .any(|version| Version::parse(&format!("{prefix}{version}")).is_ok());
+    if !prefix.is_empty() && (tags_read_as_versions || !usable_prefix(repo, &prefix)?) {
+        return Err(config_error(format!(
+            "invalid tag_prefix for the root project: '{prefix}'"
+        )));
+    }
+    Ok(prefix)
+}
+
 impl ReleaseContext {
     pub fn resolve(selector: Option<&str>) -> Result<Self> {
         Self::at(&std::env::current_dir()?, selector)
@@ -97,7 +139,7 @@ impl ReleaseContext {
             .try_into()
             .map_err(|e| config_error(format!("project registry: {e}")))?;
         let mut entries = Vec::new();
-        let mut prefixes = vec!["v".to_string()];
+        let mut prefixes = vec![root_prefix(&repo, &value)?];
         for (name, entry) in &registry.projects {
             if name.is_empty()
                 || !name
@@ -121,17 +163,7 @@ impl ReleaseContext {
                     "project '{name}' has an escaped, duplicate, or nested root"
                 )));
             }
-            if !entry
-                .tag_prefix
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_alphanumeric())
-                || !entry
-                    .tag_prefix
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
-                || !git::valid_tag(&repo, &format!("{}0.0.0", entry.tag_prefix))?
-            {
+            if !usable_prefix(&repo, &entry.tag_prefix)? {
                 return Err(config_error(format!(
                     "invalid tag_prefix for project '{name}'"
                 )));
@@ -176,7 +208,7 @@ impl ReleaseContext {
             entries.push((name, root));
         }
         let independent_roots: Vec<_> = entries.iter().map(|(_, p)| p.clone()).collect();
-        let (root, prefix, includes) = if let Some(name) = selector {
+        let (root, mut prefix, includes) = if let Some(name) = selector {
             let entry = registry.projects.get(name).ok_or_else(|| {
                 config_error(format!(
                     "unknown project '{name}'; available: {}",
@@ -237,7 +269,12 @@ impl ReleaseContext {
         let mut config = Config::load_checked(&root.join("vership.toml"))?;
         let child_value = read_config(&root.join("vership.toml"))?;
         let root_config = Config::load_checked(&repo.join("vership.toml"))?;
-        if selector.is_some() {
+        if let Some(name) = selector {
+            if configured_prefix(&child_value)?.is_some() {
+                return Err(config_error(format!(
+                    "set tag_prefix for project '{name}' in the repository registry, not in its own vership.toml"
+                )));
+            }
             if child_value.get("projects").is_some() {
                 return Err(config_error("nested project registries are unsupported"));
             }
@@ -252,6 +289,8 @@ impl ReleaseContext {
                 ));
             }
             config.project.branch = root_config.project.branch;
+        } else {
+            prefix = root_prefix(&repo, &child_value)?;
         }
         let verify_targets = child_value
             .get("verify")

@@ -244,6 +244,17 @@ pub(crate) fn show_in(
         let root = value
             .as_object_mut()
             .ok_or_else(|| Error::Config("serialized config is not an object".to_string()))?;
+        // A registered project's prefix is a registry setting, reported under
+        // `selection`; only a root project's own `[project]` table carries one.
+        if ctx.name.is_none() {
+            root.entry("project")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .ok_or_else(|| {
+                    Error::Config("serialized project config is not an object".to_string())
+                })?
+                .insert("tag_prefix".to_string(), serde_json::json!(ctx.prefix));
+        }
         root.entry("checks")
             .or_insert_with(|| serde_json::json!({}))
             .as_object_mut()
@@ -280,6 +291,18 @@ pub(crate) fn show_in(
         let root = value
             .as_table_mut()
             .ok_or_else(|| Error::Config("serialized config is not a table".to_string()))?;
+        if ctx.name.is_none() {
+            root.entry("project")
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+                .as_table_mut()
+                .ok_or_else(|| {
+                    Error::Config("serialized project config is not a table".to_string())
+                })?
+                .insert(
+                    "tag_prefix".to_string(),
+                    toml::Value::String(ctx.prefix.clone()),
+                );
+        }
         root.entry("checks")
             .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
             .as_table_mut()
@@ -347,6 +370,7 @@ pub fn init() -> Result<()> {
 # [project]
 # type = "rust"        # Override auto-detection: "rust", "rust-maturin", "node", "go", "python", "gradle", "ansible-collection"
 # branch = "main"      # Branch to release from
+# tag_prefix = "v"     # Release tags are <tag_prefix><version>; "" tags the bare version
 
 # [changelog]
 # unconventional = "exclude"   # "exclude", "include", or "strict"

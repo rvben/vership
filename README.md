@@ -299,6 +299,8 @@ Commands run from the project root via `sh -c`. Output files are staged automati
 branch = "main"              # Branch to release from
 type = "go"                  # Skip detection: rust, rust-maturin, node, go,
                              # python, gradle, ansible-collection
+tag_prefix = "v"             # Release tags are <tag_prefix><version>; "" tags
+                             # the bare version (1.2.3)
 
 [hooks]
 pre-bump = "make verify"     # Run before version bump
@@ -317,10 +319,16 @@ curated = "merge"            # "merge" generated entries into curated Unreleased
                              # notes, or "replace" them with the notes
 ```
 
+`tag_prefix` names the tags vership creates and the ones it reads: only tags of the form `<tag_prefix><version>` count as releases of the project. `bump`, `release`, `status` and `changelog` work from them, and `verify` looks for the tag and the GitHub release under that name. Set it to `""` for a repository whose releases are tagged `1.2.3`, as Obsidian plugins must be.
+
+Changing it on a repository that already has releases starts a new tag namespace. To keep the changelog range and the version check anchored to the latest release, give that release a tag under the new name and publish it before the next bump: `git tag 1.2.3 'v1.2.3^{}'`, then `git push origin refs/tags/1.2.3`. vership pushes only the tag it creates, and pushing the alias runs any workflow that triggers on such tags.
+
 ## Independent projects in one repository
 
 Register each independently versioned package in the repository's root
-`vership.toml`. The existing root project keeps its `v<version>` tags and commands.
+`vership.toml`. The existing root project keeps its own tags (`v<version>` unless
+`[project] tag_prefix` says otherwise) and commands. A registered project's prefix
+is set here, in the registry, never in the project's own `vership.toml`.
 
 ```toml
 [projects.agent]
